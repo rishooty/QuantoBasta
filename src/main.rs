@@ -8,15 +8,24 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{GamepadId, Gilrs, Event};
+use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
-use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
+use pixels::wgpu::Surface;
+use pixels::Pixels;
+use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
 use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use winit::dpi::LogicalSize;
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::platform::macos::WindowExtMacOS;
+use winit::window::Window;
+use bytemuck::cast_slice;
+use winit::window::WindowBuilder;
 
 // Define global static variables for handling input, pixel format, video, and audio data
 static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
@@ -66,20 +75,16 @@ fn main() {
         bytes_per_pixel: 0,
     };
 
-    // Create a new window with specific options
-    let mut window = Window::new(
-        "Test", // Window title
-        256,    // Window width
-        144,    // Window height
-        WindowOptions {
-            resize: true, // Allow window resizing
-            ..WindowOptions::default()
-        },
-    )
-    .expect("Unable to open Window");
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("Retro Emulator")
+        .with_inner_size(LogicalSize::new(256, 144))
+        .build(&event_loop)
+        .unwrap();
+    let size = window.inner_size();
 
-    // Limit window update rate to approximately 60 frames per second
-    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+    let mut pixels = Pixels::new(size.width, size.height, surface_texture).unwrap();
 
     // Initialize the core of the emulator and update the emulator state
     let (core, updated_state) = libretro::Core::new(current_state);
@@ -130,49 +135,78 @@ fn main() {
     let mut active_gamepad: Option<GamepadId> = None;
 
     // Main application loop
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        {
-            let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-            let buttons_pressed = &mut buttons.0;
-            let mut game_pad_active: bool = false;
+    event_loop.run(move |event, _, control_flow| {
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => *control_flow = ControlFlow::Exit,
+            Event::RedrawRequested(_) => {
+                // Render your emulator frame here
+                let frame = pixels.frame_mut();
 
-            while let Some(Event { id, .. }) = gilrs.next_event() {
-                // println!("{:?} New event from {}: {:?}", time, id, event);
-                active_gamepad = Some(id);
-            }
+                // Copy the emulator frame data to the `pixels` frame
+                let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
 
-            // Handle gamepad and keyboard input
-            if let Some(gamepad) = active_gamepad {
-                input::handle_gamepad_input(
-                    &joypad_device_map,
-                    &gilrs,
-                    &Some(gamepad),
-                    buttons_pressed,
-                );
-                game_pad_active = true;
+                // Iterate over the video data received from the core
+                for video_data in video_data_receiver.try_iter() {
+                    let buffer_u8: &[u8] = cast_slice(&video_data.frame_buffer);
+                    frame.copy_from_slice(buffer_u8);
+                }
+
+                // Then render it using `pixels`
+                if pixels.render().is_err() {
+                    *control_flow = ControlFlow::Exit;
+                    return;
+                }
             }
-            input::handle_keyboard_input(
-                core_api,
-                &window,
-                &mut current_state,
-                buttons_pressed,
-                &key_device_map,
-                &config,
-                game_pad_active,
-            );
+            _ => (),
         }
-        unsafe {
-            // Run one frame of the emulator
-            (core_api.retro_run)();
-            // If needed, set up pixel format
-            if current_state.bytes_per_pixel == 0 {
-                current_state = video::set_up_pixel_format(current_state);
-            }
+    });
 
-            // Render the frame
-            let rendered_frame = video::render_frame(current_state, window);
-            current_state = rendered_frame.0;
-            window = rendered_frame.1;
-        }
-    }
+    //     while window.is_open() && !window.is_key_down(Key::Escape) {
+    //         {
+    //             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+    //             let buttons_pressed = &mut buttons.0;
+    //             let mut game_pad_active: bool = false;
+
+    //             while let Some(gEvent { id, .. }) = gilrs.next_event() {
+    //                 // println!("{:?} New event from {}: {:?}", time, id, event);
+    //                 active_gamepad = Some(id);
+    //             }
+
+    //             // Handle gamepad and keyboard input
+    //             if let Some(gamepad) = active_gamepad {
+    //                 input::handle_gamepad_input(
+    //                     &joypad_device_map,
+    //                     &gilrs,
+    //                     &Some(gamepad),
+    //                     buttons_pressed,
+    //                 );
+    //                 game_pad_active = true;
+    //             }
+    //             input::handle_keyboard_input(
+    //                 core_api,
+    //                 &window,
+    //                 &mut current_state,
+    //                 buttons_pressed,
+    //                 &key_device_map,
+    //                 &config,
+    //                 game_pad_active,
+    //             );
+    //         }
+    //         unsafe {
+    //             // Run one frame of the emulator
+    //             (core_api.retro_run)();
+    //             // If needed, set up pixel format
+    //             if current_state.bytes_per_pixel == 0 {
+    //                 current_state = video::set_up_pixel_format(current_state);
+    //             }
+
+    //             // Render the frame
+    //             let rendered_frame = video::render_frame(current_state, window);
+    //             current_state = rendered_frame.0;
+    //             window = rendered_frame.1;
+    //         }
+    //     }
 }
