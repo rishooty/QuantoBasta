@@ -88,7 +88,7 @@ fn main() {
 
     // Initialize the core of the emulator and update the emulator state
     let (core, updated_state) = libretro::Core::new(current_state);
-    let core_api = &core.api; // Reference to the core API
+    let core = Arc::new(Mutex::new(core));
     current_state = updated_state;
 
     // Extract the audio sample rate from the emulator state
@@ -116,6 +116,7 @@ fn main() {
 
     // Set up libretro callbacks for video, input, and audio
     unsafe {
+        let core_api = &core.lock().unwrap().api;
         (core_api.retro_init)();
         (core_api.retro_set_video_refresh)(video::libretro_set_video_refresh_callback);
         (core_api.retro_set_input_poll)(input::libretro_set_input_poll_callback);
@@ -143,6 +144,10 @@ fn main() {
             } => *control_flow = ControlFlow::Exit,
             Event::RedrawRequested(_) => {
                 // Render your emulator frame here
+                unsafe {
+                    let core_api = &core.lock().unwrap().api;
+                    (core_api.retro_run)();
+                }
                 let frame = pixels.frame_mut();
 
                 // Copy the emulator frame data to the `pixels` frame
