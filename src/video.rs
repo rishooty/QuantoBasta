@@ -25,6 +25,23 @@ impl Default for EmulatorPixelFormat {
     }
 }
 
+pub fn convert_rgb565_to_xrgb8888(first_byte: u8, second_byte: u8) -> u32 {
+    // Extract the color components from the 16-bit RGB565 format
+    let red = (first_byte & 0b1111_1000) >> 3;
+    let green = ((first_byte & 0b0000_0111) << 3) | ((second_byte & 0b1110_0000) >> 5);
+    let blue = second_byte & 0b0001_1111;
+
+    // Scale up the color components to fit in the 32-bit XRGB8888 format
+    // RGB565 has 5 bits for R and B, and 6 bits for G, so we need to scale them up
+    let red = (red << 3) | (red >> 2); // 5-bit to 8-bit
+    let green = (green << 2) | (green >> 4); // 6-bit to 8-bit
+    let blue = (blue << 3) | (blue >> 2); // 5-bit to 8-bit
+
+    // Combine the color components into one 32-bit XRGB8888 value
+    // XRGB8888 format: 0xFFRRGGBB, where FF is the alpha channel set to fully opaque
+    0xFF000000 | ((red as u32) << 16) | ((green as u32) << 8) | (blue as u32)
+}
+
 // Callback function that the libretro core will use to pass video frame data.
 pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     frame_buffer_data: *const libc::c_void,
@@ -36,17 +53,16 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
         println!("frame_buffer_data was null");
         return;
     }
-    let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as u32;
-    let length_of_frame_buffer = ((pitch as u32) * height) * bpp;
 
+    let length_of_frame_buffer = (pitch as u32) * height;
     let buffer_slice = std::slice::from_raw_parts(
         frame_buffer_data as *const u8,
         length_of_frame_buffer as usize,
     );
-    let result = convert_pixel_array_from_rgb565_to_xrgb8888(buffer_slice);
 
+    // Here, we just pass the raw frame buffer data without converting it
     let video_data = VideoData {
-        frame_buffer: Vec::from(result),
+        frame_buffer: buffer_slice.to_vec(),
         width: width as u32,
         height: height as u32,
         pitch: pitch as u32,
@@ -77,21 +93,22 @@ pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
 }
 
 // Converts a pixel array from RGB565 format to XRGB8888 format.
-fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
-    let bytes_per_pixel = 2;
+pub fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
+    let source_bpp = 2;
     assert_eq!(
-        color_array.len() % bytes_per_pixel,
+        color_array.len() % source_bpp,
         0,
         "color_array length must be a multiple of 2 (16-bits per pixel)"
     );
 
-    let num_pixels = color_array.len() / bytes_per_pixel;
-    let mut result = vec![0u32; num_pixels];
+    // Inside your convert_pixel_array_from_rgb565_to_xrgb8888 function
+    let num_pixels = color_array.len() / 2; // 2 bytes per pixel for RGB565
+    let mut result = vec![0u32; num_pixels]; // One u32 per pixel for XRGB8888
 
     for i in 0..num_pixels {
         // This Rust code is decoding a 16-bit color value, represented by two bytes of data, into its corresponding red, green, and blue components.
-        let first_byte = color_array[bytes_per_pixel * i];
-        let second_byte = color_array[(bytes_per_pixel * i) + 1];
+        let first_byte = color_array[source_bpp * i];
+        let second_byte = color_array[source_bpp * i + 1];
 
         // First extract the red component from the first byte. The first byte contains the most significant 8 bits of the 16-bit color value. The & operator performs a bitwise AND operation on first_byte and 0b1111_1000, which extracts the 5 most significant bits of the byte. The >> operator then shifts the extracted bits to the right by 3 positions, effectively dividing by 8, to get the value of the red component on a scale of 0-31.
         let red = (first_byte & 0b1111_1000) >> 3;
@@ -112,64 +129,64 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
     result.into_boxed_slice()
 }
 
-// Renders the frame received from the libretro core to the window.
-pub fn render_frame(current_state: EmulatorState, mut window: Window) -> (EmulatorState, Window) {
-    // Lock the video data channel to prevent data races
-    let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+// // Renders the frame received from the libretro core to the window.
+// pub fn render_frame(current_state: EmulatorState, mut window: Window) -> (EmulatorState, Window) {
+//     // Lock the video data channel to prevent data races
+//     let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
 
-    // Iterate over the video data received from the core
-    for video_data in video_data_receiver.try_iter() {
-        // Extract the video data dimensions
-        let source_width = video_data.width as usize;
-        let source_height = video_data.height as usize;
-        let pitch = video_data.pitch as usize; // number of bytes per row
+//     // Iterate over the video data received from the core
+//     for video_data in video_data_receiver.try_iter() {
+//         // Extract the video data dimensions
+//         let source_width = video_data.width as usize;
+//         let source_height = video_data.height as usize;
+//         let pitch = video_data.pitch as usize; // number of bytes per row
 
-        // Calculate the window size
-        let window_size = window.get_size();
-        let scale_x = window_size.0 / source_width;
-        let scale_y = window_size.1 / source_height;
-        let scale = scale_y.min(scale_x); // maintain aspect ratio
+//         // Calculate the window size
+//         let window_size = window.get_size();
+//         let scale_x = window_size.0 / source_width;
+//         let scale_y = window_size.1 / source_height;
+//         let scale = scale_y.min(scale_x); // maintain aspect ratio
 
-        // Calculate the target dimensions
-        let target_width = source_width * scale;
-        let target_height = source_height * scale;
+//         // Calculate the target dimensions
+//         let target_width = source_width * scale;
+//         let target_height = source_height * scale;
 
-        // Calculate padding for centering the image
-        let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
-        let padding_x = (window_size.0 - target_width) / bpp;
-        let padding_y = (window_size.1 - target_height) / bpp;
+//         // Calculate padding for centering the image
+//         let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
+//         let padding_x = (window_size.0 - target_width) / bpp;
+//         let padding_y = (window_size.1 - target_height) / bpp;
 
-        // Prepare the buffer that will be sent to the window
-        let mut window_buffer = vec![0; window_size.0 * window_size.1];
-        for y in 0..source_height {
-            let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
-            let dest_start = (y * scale + padding_y) * window_size.0 + padding_x;
+//         // Prepare the buffer that will be sent to the window
+//         let mut window_buffer = vec![0; window_size.0 * window_size.1];
+//         for y in 0..source_height {
+//             let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
+//             let dest_start = (y * scale + padding_y) * window_size.0 + padding_x;
 
-            // Copy each row, taking into account the pitch and scaling
-            for x in 0..source_width {
-                let dest_index = dest_start + x * scale;
-                let source_index = source_start + x;
+//             // Copy each row, taking into account the pitch and scaling
+//             for x in 0..source_width {
+//                 let dest_index = dest_start + x * scale;
+//                 let source_index = source_start + x;
 
-                // Copy the pixel `scale` times in both X and Y dimensions
-                for dx in 0..scale {
-                    for dy in 0..scale {
-                        let window_index = (dest_index + dy * window_size.0 + dx) as usize;
-                        let source_pixel = video_data
-                            .frame_buffer
-                            .get(source_index)
-                            .copied()
-                            .unwrap_or(0);
-                        window_buffer[window_index] = source_pixel;
-                    }
-                }
-            }
-        }
+//                 // Copy the pixel `scale` times in both X and Y dimensions
+//                 for dx in 0..scale {
+//                     for dy in 0..scale {
+//                         let window_index = (dest_index + dy * window_size.0 + dx) as usize;
+//                         let source_pixel = video_data
+//                             .frame_buffer
+//                             .get(source_index)
+//                             .copied()
+//                             .unwrap_or(0);
+//                         window_buffer[window_index] = source_pixel;
+//                     }
+//                 }
+//             }
+//         }
 
-        // Update the window
-        window
-            .update_with_buffer(&window_buffer, window_size.0, window_size.1)
-            .unwrap();
-    }
+//         // Update the window
+//         window
+//             .update_with_buffer(&window_buffer, window_size.0, window_size.1)
+//             .unwrap();
+//     }
 
-    return (current_state, window);
-}
+//     return (current_state, window);
+// }

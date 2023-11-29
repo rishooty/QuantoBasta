@@ -12,6 +12,7 @@ use bytemuck::cast_slice;
 use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
+use pixels::raw_window_handle::WindowHandle;
 use pixels::wgpu::Surface;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
@@ -54,7 +55,7 @@ static AUDIO_DATA_CHANNEL: Lazy<(
 
 // Structure to hold video data
 struct VideoData {
-    frame_buffer: Vec<u32>,
+    frame_buffer: Vec<u8>,
     width: u32,
     height: u32,
     pitch: u32,
@@ -78,17 +79,21 @@ fn main() {
         bytes_per_pixel: 0,
     };
 
+    // Set this to the actual size of the video data
+    let video_width = 256;
+    let video_height = 144;
+
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
-        .with_inner_size(LogicalSize::new(256, 144))
+        .with_inner_size(LogicalSize::new(video_width, video_height))
         .build(&event_loop)
         .unwrap();
-    let window_id = window.id();
-    let size = window.inner_size();
 
-    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-    let mut pixels = Pixels::new(size.width, size.height, surface_texture).unwrap();
+    let window_id = window.id();
+
+    let surface_texture = SurfaceTexture::new(video_width, video_height, &window);
+    let mut pixels = Pixels::new(video_width, video_height, surface_texture).unwrap();
 
     // Initialize the core of the emulator and update the emulator state
     let (core, updated_state) = libretro::Core::new(current_state);
@@ -174,55 +179,55 @@ fn main() {
 
                 // Iterate over the video data received from the core
                 for video_data in video_data_receiver.try_iter() {
-                    let source_width = video_data.width as usize;
+                    // Extract the video data dimensions
+                    let source_effective_width = video_data.pitch as usize / 2; // Effective width in pixels for RGB565 format
                     let source_height = video_data.height as usize;
                     let pitch = video_data.pitch as usize; // number of bytes per row
 
                     // Calculate the window size
-                    let window_size = (size.width, size.height);
-                    let scale_x = window_size.0 as usize / source_width;
-                    let scale_y = window_size.1 as usize / source_height;
-                    let scale = scale_y.min(scale_x); // maintain aspect ratio
+                    let inner_size = window.inner_size();
+                    let window_width = inner_size.width as usize;
+                    let window_height = inner_size.height as usize;
 
-                    // Calculate the target dimensions
-                    let target_width = source_width * scale;
-                    let target_height = source_height * scale;
+                    // // Ensure the window size matches the source size for a direct copy
+                    // assert_eq!(window_width as usize, source_width);
+                    // assert_eq!(window_height as usize, source_height);
 
-                    // Calculate padding for centering the image
-                    let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
-                    let padding_x = (window_size.0 as usize - target_width) / bpp;
-                    let padding_y = (window_size.1 as usize - target_height) / bpp;
-
+                    // Get the pixels frame buffer
                     let frame = pixels.frame_mut();
 
-                    // Prepare the buffer that will be sent to the window
-                    for y in 0..source_height {
-                        let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
-                        let dest_start =
-                            (y * scale + padding_y) * window_size.0 as usize + padding_x;
+                    // Directly copy each row from the source to the frame buffer
+                    let pitch_in_pixels = pitch as usize / 2; // Since RGB565 uses 2 bytes per pixel
 
-                        // Copy each row, taking into account the pitch and scaling
-                        for x in 0..source_width {
-                            let dest_index = dest_start + x * scale;
-                            let source_index = source_start + x;
+                    for y in 0..video_height as usize {
+                        let source_row_start = y * pitch as usize; // Starting byte index for the source row
+                        let dest_row_start = y * video_width as usize * 4; // Starting byte index for the destination row
 
-                            // Copy the pixel `scale` times in both X and Y dimensions
-                            for dx in 0..scale {
-                                for dy in 0..scale {
-                                    let window_index =
-                                        (dest_index + dy * window_size.0 as usize + dx) as usize;
-                                    let source_pixel = video_data
-                                        .frame_buffer
-                                        .get(source_index)
-                                        .copied()
-                                        .unwrap_or(0);
-                                    frame[window_index] = source_pixel as u8;
-                                }
+                        for x in 0..pitch_in_pixels {
+                            // Iterate over pixels, not bytes
+                            let source_pixel_index = source_row_start + x * 2; // 2 bytes per source pixel
+                            let dest_pixel_index = dest_row_start + x * 4; // 4 bytes per destination pixel
+
+                            // Make sure we don't run out of bounds
+                            if source_pixel_index + 1 >= video_data.frame_buffer.len() {
+                                break;
                             }
+
+                            // Access the two bytes representing one RGB565 pixel
+                            let first_byte = video_data.frame_buffer[source_pixel_index];
+                            let second_byte = video_data.frame_buffer[source_pixel_index + 1];
+
+                            // Convert the RGB565 pixel to an XRGB8888 pixel
+                            let converted_pixel =
+                                video::convert_rgb565_to_xrgb8888(first_byte, second_byte);
+
+                            // Copy the converted pixel into the frame buffer
+                            let dest_slice = &mut frame[dest_pixel_index..dest_pixel_index + 4];
+                            dest_slice.copy_from_slice(&converted_pixel.to_ne_bytes());
                         }
                     }
 
-                    // Then render it using `pixels`
+                    // Render the frame buffer
                     if pixels.render().is_err() {
                         *control_flow = ControlFlow::Exit;
                         return;
