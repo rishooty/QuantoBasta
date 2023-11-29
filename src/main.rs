@@ -19,6 +19,7 @@ use rodio::{OutputStream, Sink};
 use std::process;
 use std::process::exit;
 use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -152,20 +153,80 @@ fn main() {
                     let core_api = &core.lock().unwrap().api;
                     (core_api.retro_run)();
                 }
-                let frame = pixels.frame_mut();
+                // If needed, set up pixel format
+                if current_state.bytes_per_pixel == 0 {
+                    let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
+
+                    for pixel_format in pixel_format_receiver.try_iter() {
+                        current_state.pixel_format.0 = pixel_format;
+                        let bpp = match pixel_format {
+                            PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
+                            PixelFormat::ARGB8888 => 4,
+                        };
+                        println!("Core will send us pixel data in format {:?}", pixel_format);
+                        BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
+                        current_state.bytes_per_pixel = bpp;
+                    }
+                }
 
                 // Copy the emulator frame data to the `pixels` frame
                 let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+
                 // Iterate over the video data received from the core
                 for video_data in video_data_receiver.try_iter() {
-                    let buffer_u8: &[u8] = cast_slice(&video_data.frame_buffer);
-                    frame.copy_from_slice(buffer_u8);
-                }
+                    let source_width = video_data.width as usize;
+                    let source_height = video_data.height as usize;
+                    let pitch = video_data.pitch as usize; // number of bytes per row
 
-                // Then render it using `pixels`
-                if pixels.render().is_err() {
-                    *control_flow = ControlFlow::Exit;
-                    return;
+                    // Calculate the window size
+                    let window_size = (size.width, size.height);
+                    let scale_x = window_size.0 as usize / source_width;
+                    let scale_y = window_size.1 as usize / source_height;
+                    let scale = scale_y.min(scale_x); // maintain aspect ratio
+
+                    // Calculate the target dimensions
+                    let target_width = source_width * scale;
+                    let target_height = source_height * scale;
+
+                    // Calculate padding for centering the image
+                    let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
+                    let padding_x = (window_size.0 as usize - target_width) / bpp;
+                    let padding_y = (window_size.1 as usize - target_height) / bpp;
+
+                    let frame = pixels.frame_mut();
+
+                    // Prepare the buffer that will be sent to the window
+                    for y in 0..source_height {
+                        let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
+                        let dest_start =
+                            (y * scale + padding_y) * window_size.0 as usize + padding_x;
+
+                        // Copy each row, taking into account the pitch and scaling
+                        for x in 0..source_width {
+                            let dest_index = dest_start + x * scale;
+                            let source_index = source_start + x;
+
+                            // Copy the pixel `scale` times in both X and Y dimensions
+                            for dx in 0..scale {
+                                for dy in 0..scale {
+                                    let window_index =
+                                        (dest_index + dy * window_size.0 as usize + dx) as usize;
+                                    let source_pixel = video_data
+                                        .frame_buffer
+                                        .get(source_index)
+                                        .copied()
+                                        .unwrap_or(0);
+                                    frame[window_index] = source_pixel as u8;
+                                }
+                            }
+                        }
+                    }
+
+                    // Then render it using `pixels`
+                    if pixels.render().is_err() {
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
                 }
 
                 // Request a redraw for the next frame
