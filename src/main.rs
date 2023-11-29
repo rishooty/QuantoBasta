@@ -8,6 +8,7 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
+use bytemuck::cast_slice;
 use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
@@ -15,6 +16,8 @@ use pixels::wgpu::Surface;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
+use std::process;
+use std::process::exit;
 use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -24,7 +27,6 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::macos::WindowExtMacOS;
 use winit::window::Window;
-use bytemuck::cast_slice;
 use winit::window::WindowBuilder;
 
 // Define global static variables for handling input, pixel format, video, and audio data
@@ -81,6 +83,7 @@ fn main() {
         .with_inner_size(LogicalSize::new(256, 144))
         .build(&event_loop)
         .unwrap();
+    let window_id = window.id();
     let size = window.inner_size();
 
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
@@ -140,9 +143,10 @@ fn main() {
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
+                window_id: id,
                 ..
-            } => *control_flow = ControlFlow::Exit,
-            Event::RedrawRequested(_) => {
+            } if id == window_id => *control_flow = ControlFlow::Exit,
+            Event::RedrawRequested(id) if id == window_id => {
                 // Render your emulator frame here
                 unsafe {
                     let core_api = &core.lock().unwrap().api;
@@ -152,7 +156,6 @@ fn main() {
 
                 // Copy the emulator frame data to the `pixels` frame
                 let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
-
                 // Iterate over the video data received from the core
                 for video_data in video_data_receiver.try_iter() {
                     let buffer_u8: &[u8] = cast_slice(&video_data.frame_buffer);
@@ -164,6 +167,9 @@ fn main() {
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
+
+                // Request a redraw for the next frame
+                window.request_redraw();
             }
             _ => (),
         }
