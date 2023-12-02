@@ -8,27 +8,22 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use bytemuck::cast_slice;
 use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
-use pixels::raw_window_handle::WindowHandle;
-use pixels::wgpu::Surface;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
 use std::process;
-use std::process::exit;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use video::convert_rgb565_to_xrgb8888;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::macos::WindowExtMacOS;
-use winit::window::Window;
 use winit::window::WindowBuilder;
 
 // Define global static variables for handling input, pixel format, video, and audio data
@@ -79,30 +74,31 @@ fn main() {
         bytes_per_pixel: 0,
     };
 
-    // Set this to the actual size of the video data
-    let video_width = 256;
-    let video_height = 144;
+    // Initialize the core of the emulator and update the emulator state
+    let (core, updated_state) = libretro::Core::new(current_state);
+    let core = Arc::new(Mutex::new(core));
+    current_state = updated_state;
+    let av_info = &current_state.av_info;
+    let video_width = (av_info.as_ref().unwrap().geometry).base_width;
+    let video_height = (av_info.as_ref().unwrap().geometry).base_height;
 
     let event_loop = EventLoop::new();
+
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
         .with_inner_size(LogicalSize::new(video_width, video_height))
         .build(&event_loop)
         .unwrap();
+    let window_id: winit::window::WindowId = window.id();
+    
+    let physical_width = video_width;
+    let physical_height = video_height;
 
-    let window_id = window.id();
-
-    let surface_texture = SurfaceTexture::new(video_width, video_height, &window);
-    let mut pixels = Pixels::new(video_width, video_height, surface_texture).unwrap();
-
-    // Initialize the core of the emulator and update the emulator state
-    let (core, updated_state) = libretro::Core::new(current_state);
-    let core = Arc::new(Mutex::new(core));
-    current_state = updated_state;
+    let surface_texture = SurfaceTexture::new(physical_width, physical_height, &window);
+    let mut pixels = Pixels::new(physical_width, physical_height, surface_texture).unwrap();
 
     // Extract the audio sample rate from the emulator state
-    let sample_rate = current_state
-        .av_info
+    let sample_rate = av_info
         .as_ref()
         .map_or(0.0, |av_info| av_info.timing.sample_rate);
 
@@ -148,6 +144,24 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
+                event: WindowEvent::Resized(new_inner_size),
+                window_id: id,
+            } if id == window_id => {
+                let new_physical_width = new_inner_size.width;
+                let new_physical_height = new_inner_size.height;
+            
+                let _ = pixels.resize_surface(new_physical_width, new_physical_height);
+            }            
+            Event::WindowEvent {
+                event: WindowEvent::ScaleFactorChanged { new_inner_size, .. },
+                window_id: id,
+            } if id == window_id => {
+                let new_physical_width = new_inner_size.width;
+                let new_physical_height = new_inner_size.height;
+            
+                let _ = pixels.resize_surface(new_physical_width as u32, new_physical_height as u32);
+            }
+            Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 window_id: id,
                 ..
@@ -180,50 +194,47 @@ fn main() {
                 // Iterate over the video data received from the core
                 for video_data in video_data_receiver.try_iter() {
                     // Extract the video data dimensions
-                    let source_effective_width = video_data.pitch as usize / 2; // Effective width in pixels for RGB565 format
-                    let source_height = video_data.height as usize;
                     let pitch = video_data.pitch as usize; // number of bytes per row
-
-                    // Calculate the window size
-                    let inner_size = window.inner_size();
-                    let window_width = inner_size.width as usize;
-                    let window_height = inner_size.height as usize;
-
-                    // // Ensure the window size matches the source size for a direct copy
-                    // assert_eq!(window_width as usize, source_width);
-                    // assert_eq!(window_height as usize, source_height);
 
                     // Get the pixels frame buffer
                     let frame = pixels.frame_mut();
 
-                    // Directly copy each row from the source to the frame buffer
-                    let pitch_in_pixels = pitch as usize / 2; // Since RGB565 uses 2 bytes per pixel
+                    // Assuming `current_state.pixel_format.0` gives you the source format...
+                    let bytes_per_pixel_source = current_state.bytes_per_pixel as usize;
 
                     for y in 0..video_height as usize {
-                        let source_row_start = y * pitch as usize; // Starting byte index for the source row
-                        let dest_row_start = y * video_width as usize * 4; // Starting byte index for the destination row
+                        for x in 0..(video_width as usize) {
+                            let source_index = y * pitch + x * bytes_per_pixel_source;
+                            let dest_index = (y * video_width as usize + x) * 4; // 4 bytes per pixel for ARGB8888
 
-                        for x in 0..pitch_in_pixels {
-                            // Iterate over pixels, not bytes
-                            let source_pixel_index = source_row_start + x * 2; // 2 bytes per source pixel
-                            let dest_pixel_index = dest_row_start + x * 4; // 4 bytes per destination pixel
-
-                            // Make sure we don't run out of bounds
-                            if source_pixel_index + 1 >= video_data.frame_buffer.len() {
+                            // Ensure we're not going out of bounds
+                            if source_index >= video_data.frame_buffer.len()
+                                || dest_index >= frame.len()
+                            {
                                 break;
                             }
 
-                            // Access the two bytes representing one RGB565 pixel
-                            let first_byte = video_data.frame_buffer[source_pixel_index];
-                            let second_byte = video_data.frame_buffer[source_pixel_index + 1];
+                            match current_state.pixel_format.0 {
+                                PixelFormat::RGB565 => {
+                                    // Convert RGB565 to ARGB8888
+                                    let first_byte = video_data.frame_buffer[source_index];
+                                    let second_byte = video_data.frame_buffer[source_index + 1];
+                                    let argb_color =
+                                        convert_rgb565_to_xrgb8888(first_byte, second_byte);
 
-                            // Convert the RGB565 pixel to an XRGB8888 pixel
-                            let converted_pixel =
-                                video::convert_rgb565_to_xrgb8888(first_byte, second_byte);
-
-                            // Copy the converted pixel into the frame buffer
-                            let dest_slice = &mut frame[dest_pixel_index..dest_pixel_index + 4];
-                            dest_slice.copy_from_slice(&converted_pixel.to_ne_bytes());
+                                    // Copy the converted pixel into the frame buffer
+                                    frame[dest_index..dest_index + 4]
+                                        .copy_from_slice(&argb_color.to_ne_bytes());
+                                }
+                                PixelFormat::ARGB8888 => {
+                                    // Directly copy ARGB8888 pixel
+                                    let source_slice =
+                                        &video_data.frame_buffer[source_index..source_index + 4];
+                                    frame[dest_index..dest_index + 4].copy_from_slice(source_slice);
+                                }
+                                // Handle other source formats as needed
+                                _ => { /* Handle other pixel formats if necessary */ }
+                            }
                         }
                     }
 
@@ -240,50 +251,51 @@ fn main() {
             _ => (),
         }
     });
-
-    //     while window.is_open() && !window.is_key_down(Key::Escape) {
-    //         {
-    //             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-    //             let buttons_pressed = &mut buttons.0;
-    //             let mut game_pad_active: bool = false;
-
-    //             while let Some(gEvent { id, .. }) = gilrs.next_event() {
-    //                 // println!("{:?} New event from {}: {:?}", time, id, event);
-    //                 active_gamepad = Some(id);
-    //             }
-
-    //             // Handle gamepad and keyboard input
-    //             if let Some(gamepad) = active_gamepad {
-    //                 input::handle_gamepad_input(
-    //                     &joypad_device_map,
-    //                     &gilrs,
-    //                     &Some(gamepad),
-    //                     buttons_pressed,
-    //                 );
-    //                 game_pad_active = true;
-    //             }
-    //             input::handle_keyboard_input(
-    //                 core_api,
-    //                 &window,
-    //                 &mut current_state,
-    //                 buttons_pressed,
-    //                 &key_device_map,
-    //                 &config,
-    //                 game_pad_active,
-    //             );
-    //         }
-    //         unsafe {
-    //             // Run one frame of the emulator
-    //             (core_api.retro_run)();
-    //             // If needed, set up pixel format
-    //             if current_state.bytes_per_pixel == 0 {
-    //                 current_state = video::set_up_pixel_format(current_state);
-    //             }
-
-    //             // Render the frame
-    //             let rendered_frame = video::render_frame(current_state, window);
-    //             current_state = rendered_frame.0;
-    //             window = rendered_frame.1;
-    //         }
-    //     }
 }
+
+//     while window.is_open() && !window.is_key_down(Key::Escape) {
+//         {
+//             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+//             let buttons_pressed = &mut buttons.0;
+//             let mut game_pad_active: bool = false;
+
+//             while let Some(gEvent { id, .. }) = gilrs.next_event() {
+//                 // println!("{:?} New event from {}: {:?}", time, id, event);
+//                 active_gamepad = Some(id);
+//             }
+
+//             // Handle gamepad and keyboard input
+//             if let Some(gamepad) = active_gamepad {
+//                 input::handle_gamepad_input(
+//                     &joypad_device_map,
+//                     &gilrs,
+//                     &Some(gamepad),
+//                     buttons_pressed,
+//                 );
+//                 game_pad_active = true;
+//             }
+//             input::handle_keyboard_input(
+//                 core_api,
+//                 &window,
+//                 &mut current_state,
+//                 buttons_pressed,
+//                 &key_device_map,
+//                 &config,
+//                 game_pad_active,
+//             );
+//         }
+//         unsafe {
+//             // Run one frame of the emulator
+//             (core_api.retro_run)();
+//             // If needed, set up pixel format
+//             if current_state.bytes_per_pixel == 0 {
+//                 current_state = video::set_up_pixel_format(current_state);
+//             }
+
+//             // Render the frame
+//             let rendered_frame = video::render_frame(current_state, window);
+//             current_state = rendered_frame.0;
+//             window = rendered_frame.1;
+//         }
+//     }
+//}

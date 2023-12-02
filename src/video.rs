@@ -8,8 +8,7 @@
 // rendering frames, and interfacing with the libretro video callbacks.
 
 use libretro_sys::PixelFormat;
-use minifb::Window;
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, process};
 
 use crate::{
     libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
