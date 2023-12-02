@@ -8,13 +8,12 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{Event as gEvent, GamepadId, Gilrs};
+//use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
-use std::process;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -51,8 +50,6 @@ static AUDIO_DATA_CHANNEL: Lazy<(
 // Structure to hold video data
 struct VideoData {
     frame_buffer: Vec<u8>,
-    width: u32,
-    height: u32,
     pitch: u32,
 }
 
@@ -64,10 +61,6 @@ fn main() {
     let mut current_state = libretro::EmulatorState {
         rom_name,
         library_name,
-        frame_buffer: None,
-        screen_pitch: 0,
-        screen_width: 0,
-        screen_height: 0,
         current_save_slot: 0,
         av_info: None,
         pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
@@ -90,7 +83,7 @@ fn main() {
         .build(&event_loop)
         .unwrap();
     let window_id: winit::window::WindowId = window.id();
-    
+
     let physical_width = video_width;
     let physical_height = video_height;
 
@@ -134,32 +127,29 @@ fn main() {
     }
 
     // Prepare configurations for input handling
-    let config = libretro::setup_config().unwrap();
-    let key_device_map = input::key_device_map(&config);
-    let joypad_device_map = input::setup_joypad_device_map(&config);
-    let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
-    let mut active_gamepad: Option<GamepadId> = None;
+    // let config = libretro::setup_config().unwrap();
+    // let key_device_map = input::key_device_map(&config);
+    // let joypad_device_map = input::setup_joypad_device_map(&config);
+    // let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
+    // let mut active_gamepad: Option<GamepadId> = None;
 
     // Main application loop
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
-                event: WindowEvent::Resized(new_inner_size),
+                event:
+                    WindowEvent::Resized(new_inner_size)
+                    | WindowEvent::ScaleFactorChanged {
+                        new_inner_size: &mut new_inner_size,
+                        ..
+                    },
                 window_id: id,
             } if id == window_id => {
                 let new_physical_width = new_inner_size.width;
                 let new_physical_height = new_inner_size.height;
-            
-                let _ = pixels.resize_surface(new_physical_width, new_physical_height);
-            }            
-            Event::WindowEvent {
-                event: WindowEvent::ScaleFactorChanged { new_inner_size, .. },
-                window_id: id,
-            } if id == window_id => {
-                let new_physical_width = new_inner_size.width;
-                let new_physical_height = new_inner_size.height;
-            
-                let _ = pixels.resize_surface(new_physical_width as u32, new_physical_height as u32);
+
+                let _ =
+                    pixels.resize_surface(new_physical_width as u32, new_physical_height as u32);
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -253,6 +243,8 @@ fn main() {
     });
 }
 
+// Old Input handling Example
+////////////////////////////////////////////////////////////////////
 //     while window.is_open() && !window.is_key_down(Key::Escape) {
 //         {
 //             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
@@ -284,18 +276,6 @@ fn main() {
 //                 game_pad_active,
 //             );
 //         }
-//         unsafe {
-//             // Run one frame of the emulator
-//             (core_api.retro_run)();
-//             // If needed, set up pixel format
-//             if current_state.bytes_per_pixel == 0 {
-//                 current_state = video::set_up_pixel_format(current_state);
-//             }
-
-//             // Render the frame
-//             let rendered_frame = video::render_frame(current_state, window);
-//             current_state = rendered_frame.0;
-//             window = rendered_frame.1;
-//         }
+//         // graphics processing...
 //     }
 //}

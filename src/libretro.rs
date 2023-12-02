@@ -38,14 +38,6 @@ pub struct EmulatorState {
     // Name of the core library to be loaded.
     pub library_name: String,
     #[arg(skip)]
-    pub frame_buffer: Option<Vec<u32>>,
-    #[arg(skip)]
-    pub screen_pitch: u32,
-    #[arg(skip)]
-    pub screen_width: u32,
-    #[arg(skip)]
-    pub screen_height: u32,
-    #[arg(skip)]
     pub current_save_slot: u8,
     #[arg(skip)]
     pub av_info: Option<SystemAvInfo>,
