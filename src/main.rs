@@ -19,7 +19,6 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use video::convert_rgb565_to_xrgb8888;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -133,6 +132,34 @@ fn main() {
     // let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
     // let mut active_gamepad: Option<GamepadId> = None;
 
+    let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
+    for i in 0..65536 {
+        let r = (i >> 11) & 0x1F;
+        let g = (i >> 5) & 0x3F;
+        let b = i & 0x1F;
+
+        let r = ((r * 527 + 23) >> 6) as u32;
+        let g = ((g * 259 + 33) >> 6) as u32;
+        let b = ((b * 527 + 23) >> 6) as u32;
+
+        rgb565_to_rgb8888_table[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    let mut argb1555_to_argb8888_table: [u32; 32768] = [0; 32768];
+    for i in 0..32768 {
+        let a = (i >> 15) & 0x01;
+        let r = (i >> 10) & 0x1F;
+        let g = (i >> 5) & 0x1F;
+        let b = i & 0x1F;
+
+        let a = (a * 255) as u32;
+        let r = ((r * 527 + 23) >> 6) as u32;
+        let g = ((g * 527 + 23) >> 6) as u32;
+        let b = ((b * 527 + 23) >> 6) as u32;
+
+        argb1555_to_argb8888_table[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
     // Main application loop
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -209,12 +236,27 @@ fn main() {
                                     // Convert RGB565 to ARGB8888
                                     let first_byte = video_data.frame_buffer[source_index];
                                     let second_byte = video_data.frame_buffer[source_index + 1];
-                                    let argb_color =
-                                        convert_rgb565_to_xrgb8888(first_byte, second_byte);
+                                    let rgb565 = (first_byte as u16) | ((second_byte as u16) << 8);
+
+                                    // Look up the converted pixel in the table
+                                    let argb8888 = rgb565_to_rgb8888_table[rgb565 as usize];
 
                                     // Copy the converted pixel into the frame buffer
                                     frame[dest_index..dest_index + 4]
-                                        .copy_from_slice(&argb_color.to_ne_bytes());
+                                        .copy_from_slice(&argb8888.to_ne_bytes());
+                                }
+                                PixelFormat::ARGB1555 => {
+                                    // Convert ARGB1555 to ARGB8888
+                                    let first_byte = video_data.frame_buffer[source_index];
+                                    let second_byte = video_data.frame_buffer[source_index + 1];
+                                    let argb1555 = (first_byte as u16) | ((second_byte as u16) << 8);
+                            
+                                    // Look up the converted pixel in the table
+                                    let argb8888 = argb1555_to_argb8888_table[argb1555 as usize];
+                            
+                                    // Copy the converted pixel into the frame buffer
+                                    frame[dest_index..dest_index + 4]
+                                        .copy_from_slice(&argb8888.to_ne_bytes());
                                 }
                                 PixelFormat::ARGB8888 => {
                                     // Directly copy ARGB8888 pixel
@@ -222,8 +264,6 @@ fn main() {
                                         &video_data.frame_buffer[source_index..source_index + 4];
                                     frame[dest_index..dest_index + 4].copy_from_slice(source_slice);
                                 }
-                                // Handle other source formats as needed
-                                _ => { /* Handle other pixel formats if necessary */ }
                             }
                         }
                     }
