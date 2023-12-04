@@ -8,7 +8,8 @@
 // rendering frames, and interfacing with the libretro video callbacks.
 
 use libretro_sys::PixelFormat;
-use std::sync::atomic::Ordering;
+use pixels::Pixels;
+use winit::event_loop::ControlFlow;
 
 use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 
@@ -20,23 +21,6 @@ impl Default for EmulatorPixelFormat {
     fn default() -> Self {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
-}
-
-pub fn convert_rgb565_to_xrgb8888(first_byte: u8, second_byte: u8) -> u32 {
-    // Extract the color components from the 16-bit RGB565 format
-    let red = (first_byte & 0b1111_1000) >> 3;
-    let green = ((first_byte & 0b0000_0111) << 3) | ((second_byte & 0b1110_0000) >> 5);
-    let blue = second_byte & 0b0001_1111;
-
-    // Scale up the color components to fit in the 32-bit XRGB8888 format
-    // RGB565 has 5 bits for R and B, and 6 bits for G, so we need to scale them up
-    let red = (red << 3) | (red >> 2); // 5-bit to 8-bit
-    let green = (green << 2) | (green >> 4); // 6-bit to 8-bit
-    let blue = (blue << 3) | (blue >> 2); // 5-bit to 8-bit
-
-    // Combine the color components into one 32-bit XRGB8888 value
-    // XRGB8888 format: 0xFFRRGGBB, where FF is the alpha channel set to fully opaque
-    0xFF000000 | ((red as u32) << 16) | ((green as u32) << 8) | (blue as u32)
 }
 
 // Callback function that the libretro core will use to pass video frame data.
@@ -84,4 +68,104 @@ pub fn set_up_pixel_format() -> u8 {
     }
 
     bpp
+}
+
+pub fn render_frame(pixels: &mut Pixels, current_state: &EmulatorState, video_height: u32, video_width: u32) -> ControlFlow {
+    let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
+    for i in 0..65536 {
+        let r = (i >> 11) & 0x1F;
+        let g = (i >> 5) & 0x3F;
+        let b = i & 0x1F;
+
+        let r = ((r * 527 + 23) >> 6) as u32;
+        let g = ((g * 259 + 33) >> 6) as u32;
+        let b = ((b * 527 + 23) >> 6) as u32;
+
+        rgb565_to_rgb8888_table[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    let mut argb1555_to_argb8888_table: [u32; 32768] = [0; 32768];
+    for i in 0..32768 {
+        let a = (i >> 15) & 0x01;
+        let r = (i >> 10) & 0x1F;
+        let g = (i >> 5) & 0x1F;
+        let b = i & 0x1F;
+
+        let a = (a * 255) as u32;
+        let r = ((r * 527 + 23) >> 6) as u32;
+        let g = ((g * 527 + 23) >> 6) as u32;
+        let b = ((b * 527 + 23) >> 6) as u32;
+
+        argb1555_to_argb8888_table[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    // Copy the emulator frame data to the `pixels` frame
+    let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+
+    // Iterate over the video data received from the core
+    for video_data in video_data_receiver.try_iter() {
+        // Extract the video data dimensions
+        let pitch = video_data.pitch as usize; // number of bytes per row
+
+        // Get the pixels frame buffer
+        let frame = pixels.frame_mut();
+
+        // Assuming `current_state.pixel_format.0` gives you the source format...
+        let bytes_per_pixel_source = current_state.bytes_per_pixel as usize;
+
+        for y in 0..video_height as usize {
+            for x in 0..(video_width as usize) {
+                let source_index = y * pitch + x * bytes_per_pixel_source;
+                let dest_index = (y * video_width as usize + x) * 4; // 4 bytes per pixel for ARGB8888
+
+                // Ensure we're not going out of bounds
+                if source_index >= video_data.frame_buffer.len()
+                    || dest_index >= frame.len()
+                {
+                    break;
+                }
+
+                match current_state.pixel_format.0 {
+                    PixelFormat::RGB565 => {
+                        // Convert RGB565 to ARGB8888
+                        let first_byte = video_data.frame_buffer[source_index];
+                        let second_byte = video_data.frame_buffer[source_index + 1];
+                        let rgb565 = (first_byte as u16) | ((second_byte as u16) << 8);
+
+                        // Look up the converted pixel in the table
+                        let argb8888 = rgb565_to_rgb8888_table[rgb565 as usize];
+
+                        // Copy the converted pixel into the frame buffer
+                        frame[dest_index..dest_index + 4]
+                            .copy_from_slice(&argb8888.to_ne_bytes());
+                    }
+                    PixelFormat::ARGB1555 => {
+                        // Convert ARGB1555 to ARGB8888
+                        let first_byte = video_data.frame_buffer[source_index];
+                        let second_byte = video_data.frame_buffer[source_index + 1];
+                        let argb1555 = (first_byte as u16) | ((second_byte as u16) << 8);
+                
+                        // Look up the converted pixel in the table
+                        let argb8888 = argb1555_to_argb8888_table[argb1555 as usize];
+                
+                        // Copy the converted pixel into the frame buffer
+                        frame[dest_index..dest_index + 4]
+                            .copy_from_slice(&argb8888.to_ne_bytes());
+                    }
+                    PixelFormat::ARGB8888 => {
+                        // Directly copy ARGB8888 pixel
+                        let source_slice =
+                            &video_data.frame_buffer[source_index..source_index + 4];
+                        frame[dest_index..dest_index + 4].copy_from_slice(source_slice);
+                    }
+                }
+            }
+        }
+
+        // Render the frame buffer
+        if pixels.render().is_err() {
+            return ControlFlow::Exit;
+        }
+    }
+    return ControlFlow::Poll;
 }
