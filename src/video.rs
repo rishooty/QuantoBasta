@@ -7,11 +7,10 @@
 // This module handles video output for the emulator, including pixel format conversions,
 // rendering frames, and interfacing with the libretro video callbacks.
 
+use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 use libretro_sys::PixelFormat;
 use pixels::Pixels;
 use winit::event_loop::ControlFlow;
-
-use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 
 // Represents the pixel format used by the emulator.
 pub struct EmulatorPixelFormat(pub PixelFormat);
@@ -21,6 +20,16 @@ impl Default for EmulatorPixelFormat {
     fn default() -> Self {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn check_vrr_status() {
+    print!("do that windows reg thing")
+}
+
+#[cfg(target_os = "linux")]
+pub fn check_vrr_status() {
+    print!("do that linux x11 or wayland thing")
 }
 
 // Callback function that the libretro core will use to pass video frame data.
@@ -56,7 +65,7 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
 // Sets up the pixel format for the emulator based on the libretro core's specifications.
 pub fn set_up_pixel_format() -> u8 {
     let mut bpp = 2 as u8;
-    
+
     let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
     for pixel_format in pixel_format_receiver.try_iter() {
@@ -70,7 +79,12 @@ pub fn set_up_pixel_format() -> u8 {
     bpp
 }
 
-pub fn render_frame(pixels: &mut Pixels, current_state: &EmulatorState, video_height: u32, video_width: u32) -> ControlFlow {
+pub fn render_frame(
+    pixels: &mut Pixels,
+    current_state: &EmulatorState,
+    video_height: u32,
+    video_width: u32,
+) -> ControlFlow {
     let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
     for i in 0..65536 {
         let r = (i >> 11) & 0x1F;
@@ -119,9 +133,7 @@ pub fn render_frame(pixels: &mut Pixels, current_state: &EmulatorState, video_he
                 let dest_index = (y * video_width as usize + x) * 4; // 4 bytes per pixel for ARGB8888
 
                 // Ensure we're not going out of bounds
-                if source_index >= video_data.frame_buffer.len()
-                    || dest_index >= frame.len()
-                {
+                if source_index >= video_data.frame_buffer.len() || dest_index >= frame.len() {
                     break;
                 }
 
@@ -136,26 +148,23 @@ pub fn render_frame(pixels: &mut Pixels, current_state: &EmulatorState, video_he
                         let argb8888 = rgb565_to_rgb8888_table[rgb565 as usize];
 
                         // Copy the converted pixel into the frame buffer
-                        frame[dest_index..dest_index + 4]
-                            .copy_from_slice(&argb8888.to_ne_bytes());
+                        frame[dest_index..dest_index + 4].copy_from_slice(&argb8888.to_ne_bytes());
                     }
                     PixelFormat::ARGB1555 => {
                         // Convert ARGB1555 to ARGB8888
                         let first_byte = video_data.frame_buffer[source_index];
                         let second_byte = video_data.frame_buffer[source_index + 1];
                         let argb1555 = (first_byte as u16) | ((second_byte as u16) << 8);
-                
+
                         // Look up the converted pixel in the table
                         let argb8888 = argb1555_to_argb8888_table[argb1555 as usize];
-                
+
                         // Copy the converted pixel into the frame buffer
-                        frame[dest_index..dest_index + 4]
-                            .copy_from_slice(&argb8888.to_ne_bytes());
+                        frame[dest_index..dest_index + 4].copy_from_slice(&argb8888.to_ne_bytes());
                     }
                     PixelFormat::ARGB8888 => {
                         // Directly copy ARGB8888 pixel
-                        let source_slice =
-                            &video_data.frame_buffer[source_index..source_index + 4];
+                        let source_slice = &video_data.frame_buffer[source_index..source_index + 4];
                         frame[dest_index..dest_index + 4].copy_from_slice(source_slice);
                     }
                 }

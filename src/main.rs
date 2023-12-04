@@ -7,14 +7,16 @@ mod audio;
 mod input;
 mod libretro;
 mod video;
+#[macro_use]
+extern crate objc;
 use audio::AudioBuffer;
-use libretro::EmulatorState;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
+use std::process;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -52,6 +54,9 @@ struct VideoData {
 
 // The main function, entry point of the application
 fn main() {
+    //video::check_vrr_status();
+    //process::exit(0);
+
     // Parse command line arguments to get ROM and library names
     let (rom_name, library_name) = libretro::parse_command_line_arguments();
     // Initialize emulator state with default values
@@ -74,12 +79,21 @@ fn main() {
 
     let event_loop = EventLoop::new();
 
+    // Auto refresh setup WIP
+    let primary_monitor = event_loop.primary_monitor().unwrap();
+    let monitor_refresh_rate_mhz = primary_monitor.refresh_rate_millihertz().unwrap();
+    let monitor_refresh_rate_hz = monitor_refresh_rate_mhz as f32 / 1000.0;
+
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
         .with_inner_size(LogicalSize::new(video_width, video_height))
         .build(&event_loop)
         .unwrap();
     let window_id: winit::window::WindowId = window.id();
+
+    // use winit::window::Fullscreen;
+    // // Assume `window` is the `winit` window that `pixels` is rendering to.
+    // window.set_fullscreen(Some(Fullscreen::Borderless(None)));
 
     let physical_width = video_width;
     let physical_height = video_height;
