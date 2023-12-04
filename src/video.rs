@@ -10,9 +10,7 @@
 use libretro_sys::PixelFormat;
 use std::sync::atomic::Ordering;
 
-use crate::{
-    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
-};
+use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 
 // Represents the pixel format used by the emulator.
 pub struct EmulatorPixelFormat(pub PixelFormat);
@@ -72,19 +70,18 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
 }
 
 // Sets up the pixel format for the emulator based on the libretro core's specifications.
-pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
+pub fn set_up_pixel_format() -> u8 {
+    let mut bpp = 2 as u8;
+    
     let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
     for pixel_format in pixel_format_receiver.try_iter() {
-        current_state.pixel_format.0 = pixel_format;
-        let bpp = match pixel_format {
+        bpp = match pixel_format {
             PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
             PixelFormat::ARGB8888 => 4,
         };
         println!("Core will send us pixel data in format {:?}", pixel_format);
-        BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
-        current_state.bytes_per_pixel = bpp;
     }
 
-    return current_state;
+    bpp
 }

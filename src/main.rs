@@ -14,7 +14,6 @@ use once_cell::sync::Lazy;
 use pixels::Pixels;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
-use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -27,7 +26,6 @@ use winit::window::WindowBuilder;
 // Define global static variables for handling input, pixel format, video, and audio data
 static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
     Lazy::new(|| Mutex::new((vec![0; 16], vec![0; 16])));
-static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value for bytes per pixel
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
     Lazy::new(|| {
         let (sender, receiver) = channel::<PixelFormat>();
@@ -191,18 +189,7 @@ fn main() {
                 }
                 // If needed, set up pixel format
                 if current_state.bytes_per_pixel == 0 {
-                    let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
-
-                    for pixel_format in pixel_format_receiver.try_iter() {
-                        current_state.pixel_format.0 = pixel_format;
-                        let bpp = match pixel_format {
-                            PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
-                            PixelFormat::ARGB8888 => 4,
-                        };
-                        println!("Core will send us pixel data in format {:?}", pixel_format);
-                        BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
-                        current_state.bytes_per_pixel = bpp;
-                    }
+                    current_state.bytes_per_pixel = video::set_up_pixel_format();
                 }
 
                 // Copy the emulator frame data to the `pixels` frame
