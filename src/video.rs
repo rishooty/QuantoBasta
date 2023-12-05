@@ -32,6 +32,38 @@ pub fn check_vrr_status() {
     print!("do that linux x11 or wayland thing")
 }
 
+pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate: f64) -> bool {
+    let mut min_refresh_rate = f64::MAX;
+    let mut max_refresh_rate = f64::MIN;
+    let mut count_not_divisible_by_five = 0;
+
+    for video_mode in monitor.video_modes() {
+        let refresh_rate = video_mode.refresh_rate_millihertz() as f64 / 1000.0;
+        if refresh_rate < min_refresh_rate {
+            min_refresh_rate = refresh_rate;
+        }
+        if refresh_rate > max_refresh_rate {
+            max_refresh_rate = refresh_rate;
+        }
+
+        // Check if refresh rate is not divisible by 5 and is not 144Hz
+        if refresh_rate % 5.0 != 0.0 && refresh_rate.round() as i32 != 144 {
+            count_not_divisible_by_five += 1;
+        }
+    }
+
+    println!(
+        "Min and Max refresh rates for monitor '{}': {}Hz, {}Hz",
+        monitor.name().unwrap(),
+        min_refresh_rate,
+        max_refresh_rate
+    );
+
+    return count_not_divisible_by_five > 1
+        && min_refresh_rate <= original_framerate
+        && original_framerate <= max_refresh_rate;
+}
+
 // Callback function that the libretro core will use to pass video frame data.
 pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     frame_buffer_data: *const libc::c_void,

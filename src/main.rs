@@ -7,8 +7,6 @@ mod audio;
 mod input;
 mod libretro;
 mod video;
-#[macro_use]
-extern crate objc;
 use audio::AudioBuffer;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
@@ -82,7 +80,13 @@ fn main() {
     // Auto refresh setup WIP
     let primary_monitor = event_loop.primary_monitor().unwrap();
     let monitor_refresh_rate_mhz = primary_monitor.refresh_rate_millihertz().unwrap();
-    let monitor_refresh_rate_hz = monitor_refresh_rate_mhz as f32 / 1000.0;
+    let monitor_refresh_rate_hz = monitor_refresh_rate_mhz as f64 / 1000.0;
+    let original_framerate = av_info
+    .as_ref()
+    .map_or(60.0, |av_info| av_info.timing.fps);
+    let is_vrr_ready = video::is_vrr_ready(&primary_monitor, original_framerate);
+    println!("{}", is_vrr_ready);
+    process::exit(0);
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -178,7 +182,8 @@ fn main() {
                     current_state.bytes_per_pixel = video::set_up_pixel_format();
                 }
 
-                *control_flow = video::render_frame(&mut pixels, &current_state, video_height, video_width);
+                *control_flow =
+                    video::render_frame(&mut pixels, &current_state, video_height, video_width);
 
                 // Request a redraw for the next frame
                 window.request_redraw();
@@ -187,8 +192,6 @@ fn main() {
         }
     });
 }
-
-
 
 // Old Input handling Example
 ////////////////////////////////////////////////////////////////////
