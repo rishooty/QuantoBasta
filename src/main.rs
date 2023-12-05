@@ -11,16 +11,20 @@ use audio::AudioBuffer;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
-use pixels::Pixels;
+use pixels::wgpu::PresentMode;
+use pixels::PixelsBuilder;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
-use std::process;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::monitor;
+use winit::window::Fullscreen;
 use winit::window::WindowBuilder;
 
 // Define global static variables for handling input, pixel format, video, and audio data
@@ -74,19 +78,25 @@ fn main() {
     let av_info = &current_state.av_info;
     let video_width = (av_info.as_ref().unwrap().geometry).base_width;
     let video_height = (av_info.as_ref().unwrap().geometry).base_height;
-
+    let mut is_fullscreen = false;
     let event_loop = EventLoop::new();
 
     // Auto refresh setup WIP
     let primary_monitor = event_loop.primary_monitor().unwrap();
     let monitor_refresh_rate_mhz = primary_monitor.refresh_rate_millihertz().unwrap();
     let monitor_refresh_rate_hz = monitor_refresh_rate_mhz as f64 / 1000.0;
-    let original_framerate = av_info
-    .as_ref()
-    .map_or(60.0, |av_info| av_info.timing.fps);
+    let original_framerate = av_info.as_ref().map_or(60.0, |av_info| av_info.timing.fps);
     let is_vrr_ready = video::is_vrr_ready(&primary_monitor, original_framerate);
-    println!("{}", is_vrr_ready);
-    process::exit(0);
+
+    let mut bfi_factor: f64 = 0.0;
+    let mut target_fps = monitor_refresh_rate_hz;
+    let mut present_mode: PresentMode = PresentMode::AutoVsync;
+    if is_vrr_ready {
+        target_fps = original_framerate;
+        present_mode = PresentMode::AutoNoVsync;
+    } else {
+        bfi_factor = (monitor_refresh_rate_hz / original_framerate - 1.0).round();
+    }
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -102,8 +112,15 @@ fn main() {
     let physical_width = video_width;
     let physical_height = video_height;
 
-    let surface_texture = SurfaceTexture::new(physical_width, physical_height, &window);
-    let mut pixels = Pixels::new(physical_width, physical_height, surface_texture).unwrap();
+    let pixels_build_result = PixelsBuilder::new(
+        physical_width,
+        physical_height,
+        SurfaceTexture::new(physical_width, physical_height, &window),
+    )
+    .present_mode(present_mode)
+    .build();
+
+    let mut pixels = pixels_build_result.unwrap();
 
     // Extract the audio sample rate from the emulator state
     let sample_rate = av_info
@@ -149,45 +166,79 @@ fn main() {
     // let mut active_gamepad: Option<GamepadId> = None;
 
     // Main application loop
+    let mut last_update = Instant::now();
+    let frame_duration = Duration::from_secs_f64(1.0 / target_fps); // for 60 FPS
+    let mut black_frame_counter: u64 = 0;
+
     event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::WaitUntil(last_update + frame_duration);
         match event {
             Event::WindowEvent {
-                event:
-                    WindowEvent::Resized(new_inner_size)
-                    | WindowEvent::ScaleFactorChanged {
-                        new_inner_size: &mut new_inner_size,
-                        ..
-                    },
+                event: WindowEvent::KeyboardInput { input, .. },
+                ..
+            } => {
+                if input.state == winit::event::ElementState::Pressed
+                    && input.virtual_keycode == Some(winit::event::VirtualKeyCode::F)
+                {
+                    is_fullscreen = !is_fullscreen; // Toggle fullscreen state
+                    let fullscreen = if is_fullscreen {
+                        Some(Fullscreen::Borderless(None)) // Set to fullscreen
+                    } else {
+                        None // Exit fullscreen
+                    };
+                    window.set_fullscreen(fullscreen);
+                }
+            }
+            Event::WindowEvent {
+                event,
                 window_id: id,
             } if id == window_id => {
+                let new_inner_size = match event {
+                    WindowEvent::Resized(new_inner_size) => new_inner_size,
+                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => *new_inner_size,
+                    WindowEvent::Moved(_) => window.inner_size(),
+                    _ => return,
+                };
+
                 let new_physical_width = new_inner_size.width;
                 let new_physical_height = new_inner_size.height;
 
                 let _ =
                     pixels.resize_surface(new_physical_width as u32, new_physical_height as u32);
+                //handle refresh set
+                //handle audio set
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 window_id: id,
                 ..
             } if id == window_id => *control_flow = ControlFlow::Exit,
-            Event::RedrawRequested(id) if id == window_id => {
-                // Render your emulator frame here
-                unsafe {
-                    let core_api = &core.lock().unwrap().api;
-                    (core_api.retro_run)();
+            Event::MainEventsCleared => {
+                if bfi_factor > 0.0 && black_frame_counter < bfi_factor.round() as u64 {
+                    // Render a black frame
+                    //video::render_black_frame(&mut pixels, video_height, video_width);
+                    // Increment the black frame counter
+                    black_frame_counter += 1;
+                } else {
+                    // Render your emulator frame here
+                    unsafe {
+                        let core_api = &core.lock().unwrap().api;
+                        (core_api.retro_run)();
+                    }
+                    // If needed, set up pixel format
+                    if current_state.bytes_per_pixel == 0 {
+                        current_state.bytes_per_pixel = video::set_up_pixel_format();
+                    }
+                    *control_flow =
+                        video::render_frame(&mut pixels, &current_state, video_height, video_width);
+            
+                    // Reset the black frame counter
+                    black_frame_counter = 0;
                 }
-                // If needed, set up pixel format
-                if current_state.bytes_per_pixel == 0 {
-                    current_state.bytes_per_pixel = video::set_up_pixel_format();
-                }
-
-                *control_flow =
-                    video::render_frame(&mut pixels, &current_state, video_height, video_width);
-
-                // Request a redraw for the next frame
-                window.request_redraw();
+            
+                last_update = Instant::now();
             }
+            
             _ => (),
         }
     });

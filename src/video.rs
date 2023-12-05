@@ -22,16 +22,6 @@ impl Default for EmulatorPixelFormat {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub fn check_vrr_status() {
-    print!("do that windows reg thing")
-}
-
-#[cfg(target_os = "linux")]
-pub fn check_vrr_status() {
-    print!("do that linux x11 or wayland thing")
-}
-
 pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate: f64) -> bool {
     let mut min_refresh_rate = f64::MAX;
     let mut max_refresh_rate = f64::MIN;
