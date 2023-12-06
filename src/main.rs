@@ -169,6 +169,8 @@ fn main() {
 
     // Main application loop
     let mut last_update = Instant::now();
+
+    // TODO, IMPLEMENT IN AUDIO THREAD
     let frame_duration = Duration::from_secs_f64(1.0 / target_fps); // for 60 FPS
     let mut color_frame_counter: u64 = 0;
     let mut most_common_color: Color = Color::ColorU16(0x0000);
