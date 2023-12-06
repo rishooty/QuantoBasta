@@ -91,11 +91,13 @@ fn main() {
     let mut bfi_factor: f64 = 0.0;
     let mut target_fps = monitor_refresh_rate_hz;
     let mut present_mode: PresentMode = PresentMode::AutoVsync;
+    let mut vsync_sample_factor: f64 = 1.0;
     if is_vrr_ready {
         target_fps = original_framerate;
         present_mode = PresentMode::AutoNoVsync;
     } else {
         bfi_factor = (monitor_refresh_rate_hz / original_framerate - 1.0).round();
+        vsync_sample_factor = monitor_refresh_rate_hz / original_framerate;
     }
 
     let window = WindowBuilder::new()
@@ -123,9 +125,9 @@ fn main() {
     let mut pixels = pixels_build_result.unwrap();
 
     // Extract the audio sample rate from the emulator state
-    let sample_rate = av_info
-        .as_ref()
-        .map_or(0.0, |av_info| av_info.timing.sample_rate);
+    let sample_rate = av_info.as_ref().map_or(0.0, |av_info| {
+        av_info.timing.sample_rate * vsync_sample_factor
+    });
 
     // Spawn a new thread for audio handling
     let _audio_thread = thread::spawn(move || {
