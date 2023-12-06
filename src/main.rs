@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use video::Color;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::monitor;
 use winit::window::Fullscreen;
 use winit::window::WindowBuilder;
 
@@ -168,7 +168,8 @@ fn main() {
     // Main application loop
     let mut last_update = Instant::now();
     let frame_duration = Duration::from_secs_f64(1.0 / target_fps); // for 60 FPS
-    let mut black_frame_counter: u64 = 0;
+    let mut color_frame_counter: u64 = 0;
+    let mut most_common_color: Color = Color::ColorU16(0x0000);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(last_update + frame_duration);
@@ -214,11 +215,30 @@ fn main() {
                 ..
             } if id == window_id => *control_flow = ControlFlow::Exit,
             Event::MainEventsCleared => {
-                if bfi_factor > 0.0 && black_frame_counter < bfi_factor.round() as u64 {
-                    // Render a black frame
-                    //video::render_black_frame(&mut pixels, video_height, video_width);
-                    // Increment the black frame counter
-                    black_frame_counter += 1;
+                if current_state.bytes_per_pixel != 0
+                    && bfi_factor > 0.0
+                    && color_frame_counter < bfi_factor.round() as u64
+                {
+                    // Render a greyscale frame
+                    match most_common_color {
+                        Color::ColorU16(color) => match current_state.pixel_format.0 {
+                            PixelFormat::RGB565 => {
+                                *control_flow =
+                                    video::render_color_frame_rgb565(&mut pixels, color);
+                            }
+                            PixelFormat::ARGB1555 => {
+                                *control_flow =
+                                    video::render_color_frame_argb1555(&mut pixels, color);
+                            }
+                            PixelFormat::ARGB8888 => {}
+                        },
+                        Color::ColorU32(color) => {
+                            // color is a u32 value
+                            *control_flow = video::render_color_frame_argb8888(&mut pixels, color);
+                        }
+                    }
+                    // Increment the greyscale frame counter
+                    color_frame_counter += 1;
                 } else {
                     // Render your emulator frame here
                     unsafe {
@@ -229,16 +249,16 @@ fn main() {
                     if current_state.bytes_per_pixel == 0 {
                         current_state.bytes_per_pixel = video::set_up_pixel_format();
                     }
-                    *control_flow =
+                    (*control_flow, most_common_color) =
                         video::render_frame(&mut pixels, &current_state, video_height, video_width);
-            
-                    // Reset the black frame counter
-                    black_frame_counter = 0;
+
+                    // Reset the greyscale frame counter
+                    color_frame_counter = 0;
                 }
-            
+
                 last_update = Instant::now();
             }
-            
+
             _ => (),
         }
     });

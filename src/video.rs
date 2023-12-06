@@ -22,6 +22,11 @@ impl Default for EmulatorPixelFormat {
     }
 }
 
+pub enum Color {
+    ColorU16(u16),
+    ColorU32(u32),
+}
+
 pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate: f64) -> bool {
     let mut min_refresh_rate = f64::MAX;
     let mut max_refresh_rate = f64::MIN;
@@ -101,12 +106,99 @@ pub fn set_up_pixel_format() -> u8 {
     bpp
 }
 
+pub fn render_color_frame_rgb565(pixels: &mut Pixels, color: u16) -> ControlFlow {
+    // Get the pixels frame buffer
+    let frame = pixels.frame_mut();
+
+    // Get the RGB components
+    let r = ((color >> 11) & 0x1f) as f32 / 31.0;
+    let g = ((color >> 5) & 0x3f) as f32 / 63.0;
+    let b = (color & 0x1f) as f32 / 31.0;
+
+    // Calculate the luminance
+    let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+    // Convert the luminance to a grayscale color
+    let gray = (luma * 31.0) as u16;
+    let new_color = (gray << 11) | (gray << 6) | gray;
+
+    // Fill the frame buffer with the grayscale color
+    for pixel in frame.chunks_exact_mut(2) {
+        pixel.copy_from_slice(&new_color.to_ne_bytes());
+    }
+
+    // Render the frame buffer
+    if pixels.render().is_err() {
+        return ControlFlow::Exit;
+    }
+
+    return ControlFlow::Poll;
+}
+
+pub fn render_color_frame_argb1555(pixels: &mut Pixels, color: u16) -> ControlFlow {
+    // Get the pixels frame buffer
+    let frame = pixels.frame_mut();
+
+    // Get the RGB components
+    let r = ((color >> 10) & 0x1f) as f32 / 31.0;
+    let g = ((color >> 5) & 0x1f) as f32 / 31.0;
+    let b = (color & 0x1f) as f32 / 31.0;
+
+    // Calculate the luminance
+    let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+    // Convert the luminance to a grayscale color
+    let gray = (luma * 31.0) as u16;
+    let new_color = (gray << 10) | (gray << 5) | gray;
+
+    // Fill the frame buffer with the grayscale color
+    for pixel in frame.chunks_exact_mut(2) {
+        pixel.copy_from_slice(&new_color.to_ne_bytes());
+    }
+
+    // Render the frame buffer
+    if pixels.render().is_err() {
+        return ControlFlow::Exit;
+    }
+
+    return ControlFlow::Poll;
+}
+
+
+pub fn render_color_frame_argb8888(pixels: &mut Pixels, color: u32) -> ControlFlow {
+    // Get the pixels frame buffer
+    let frame = pixels.frame_mut();
+
+    // get luma:
+    let r = ((color >> 16) & 0xff) as f32 / 255.0;
+    let g = ((color >> 8) & 0xff) as f32 / 255.0;
+    let b = (color & 0xff) as f32 / 255.0;
+
+    let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+    let gray = (luma * 255.0) as u32;
+    let new_color = (gray << 16) | (gray << 8) | gray;
+
+    // Fill the frame buffer with the specified color
+    for pixel in frame.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&new_color.to_ne_bytes());
+    }
+
+    // Render the frame buffer
+    if pixels.render().is_err() {
+        return ControlFlow::Exit;
+    }
+
+    return ControlFlow::Poll;
+}
+
 pub fn render_frame(
     pixels: &mut Pixels,
     current_state: &EmulatorState,
     video_height: u32,
     video_width: u32,
-) -> ControlFlow {
+) -> (ControlFlow, Color) {
+    let mut most_common_color: Color = Color::ColorU16(0x0000);
     let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
     for i in 0..65536 {
         let r = (i >> 11) & 0x1F;
@@ -193,10 +285,78 @@ pub fn render_frame(
             }
         }
 
+        match current_state.pixel_format.0 {
+            PixelFormat::RGB565 => {
+                most_common_color = Color::ColorU16(calculate_most_abundant_color_rgb565(
+                    video_data.frame_buffer,
+                ));
+            }
+            PixelFormat::ARGB1555 => {
+                most_common_color = Color::ColorU16(calculate_most_abundant_color_argb1555(
+                    video_data.frame_buffer,
+                ));
+            }
+            PixelFormat::ARGB8888 => {
+                most_common_color = Color::ColorU32(calculate_most_abundant_color_argb8888(
+                    video_data.frame_buffer,
+                ));
+            }
+        }
+
         // Render the frame buffer
         if pixels.render().is_err() {
-            return ControlFlow::Exit;
+            return (ControlFlow::Exit, most_common_color);
         }
     }
-    return ControlFlow::Poll;
+    return (ControlFlow::Poll, most_common_color);
+}
+
+pub fn calculate_most_abundant_color_argb8888(frame_buffer: Vec<u8>) -> u32 {
+    use std::collections::HashMap;
+
+    // Assuming `pixels` is a slice of u32 values representing ARGB8888 colors
+    let mut histogram: HashMap<u32, u32> = HashMap::new();
+    for pixel in frame_buffer.chunks(4) {
+        if pixel.len() < 4 {
+            continue;
+        }
+        let color = u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+        *histogram.entry(color).or_insert(0) += 1;
+    }
+
+    let (&most_common_color, _) = histogram.iter().max_by_key(|(_, &count)| count).unwrap();
+
+    println!("Most common color: {:X}", most_common_color);
+    most_common_color
+}
+
+pub fn calculate_most_abundant_color_rgb565(frame_buffer: Vec<u8>) -> u16 {
+    use std::collections::HashMap;
+
+    let mut histogram: HashMap<u16, u32> = HashMap::new();
+    for pixel in frame_buffer.chunks_exact(2) {
+        let color = u16::from_ne_bytes([pixel[0], pixel[1]]);
+        *histogram.entry(color).or_insert(0) += 1;
+    }
+
+    let (&most_common_color, _) = histogram.iter().max_by_key(|(_, &count)| count).unwrap();
+    println!("Most common color: {:X}", most_common_color);
+    most_common_color
+}
+
+pub fn calculate_most_abundant_color_argb1555(frame_buffer: Vec<u8>) -> u16 {
+    use std::collections::HashMap;
+
+    let mut histogram: HashMap<u16, u32> = HashMap::new();
+    for pixel in frame_buffer.chunks_exact(2) {
+        if pixel.len() < 2 {
+            continue;
+        }
+        let color = u16::from_ne_bytes([pixel[0], pixel[1]]);
+        *histogram.entry(color).or_insert(0) += 1;
+    }
+
+    let (&most_common_color, _) = histogram.iter().max_by_key(|(_, &count)| count).unwrap();
+    println!("Most common color: {:X}", most_common_color);
+    most_common_color
 }
