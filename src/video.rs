@@ -7,6 +7,8 @@
 // This module handles video output for the emulator, including pixel format conversions,
 // rendering frames, and interfacing with the libretro video callbacks.
 
+use std::{process, thread::current};
+
 use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 use libretro_sys::PixelFormat;
 use pixels::Pixels;
@@ -30,7 +32,7 @@ pub enum Color {
 pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate: f64) -> bool {
     let mut min_refresh_rate = f64::MAX;
     let mut max_refresh_rate = f64::MIN;
-    let mut count_not_divisible_by_five = 0;
+    let mut count_not_divisible_by_ten = 0;
 
     for video_mode in monitor.video_modes() {
         let refresh_rate = video_mode.refresh_rate_millihertz() as f64 / 1000.0;
@@ -42,8 +44,11 @@ pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate:
         }
 
         // Check if refresh rate is not divisible by 5 and is not 144Hz
-        if refresh_rate % 5.0 != 0.0 && refresh_rate.round() as i32 != 144 {
-            count_not_divisible_by_five += 1;
+        if refresh_rate % 10.0 != 0.0
+            && refresh_rate.round() as i32 != 144
+            && refresh_rate.round() as i32 != 75
+        {
+            count_not_divisible_by_ten += 1;
         }
     }
 
@@ -54,7 +59,7 @@ pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate:
         max_refresh_rate
     );
 
-    return count_not_divisible_by_five > 1
+    return count_not_divisible_by_ten > 1
         && min_refresh_rate <= original_framerate
         && original_framerate <= max_refresh_rate;
 }
@@ -90,8 +95,9 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
 }
 
 // Sets up the pixel format for the emulator based on the libretro core's specifications.
-pub fn set_up_pixel_format() -> u8 {
+pub fn set_up_pixel_format() -> (u8, EmulatorPixelFormat) {
     let mut bpp = 2 as u8;
+    let mut set_format = PixelFormat::ARGB8888;
 
     let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
@@ -100,10 +106,11 @@ pub fn set_up_pixel_format() -> u8 {
             PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
             PixelFormat::ARGB8888 => 4,
         };
+        set_format = pixel_format;
         println!("Core will send us pixel data in format {:?}", pixel_format);
     }
 
-    bpp
+    (bpp, EmulatorPixelFormat(set_format))
 }
 
 pub fn render_color_frame_rgb565(pixels: &mut Pixels, color: u16) -> ControlFlow {
@@ -164,7 +171,6 @@ pub fn render_color_frame_argb1555(pixels: &mut Pixels, color: u16) -> ControlFl
     return ControlFlow::Poll;
 }
 
-
 pub fn render_color_frame_argb8888(pixels: &mut Pixels, color: u32) -> ControlFlow {
     // Get the pixels frame buffer
     let frame = pixels.frame_mut();
@@ -197,6 +203,7 @@ pub fn render_frame(
     current_state: &EmulatorState,
     video_height: u32,
     video_width: u32,
+    bfi_on: bool,
 ) -> (ControlFlow, Color) {
     let mut most_common_color: Color = Color::ColorU16(0x0000);
     let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
@@ -285,21 +292,23 @@ pub fn render_frame(
             }
         }
 
-        match current_state.pixel_format.0 {
-            PixelFormat::RGB565 => {
-                most_common_color = Color::ColorU16(calculate_most_abundant_color_rgb565(
-                    video_data.frame_buffer,
-                ));
-            }
-            PixelFormat::ARGB1555 => {
-                most_common_color = Color::ColorU16(calculate_most_abundant_color_argb1555(
-                    video_data.frame_buffer,
-                ));
-            }
-            PixelFormat::ARGB8888 => {
-                most_common_color = Color::ColorU32(calculate_most_abundant_color_argb8888(
-                    video_data.frame_buffer,
-                ));
+        if bfi_on {
+            match current_state.pixel_format.0 {
+                PixelFormat::RGB565 => {
+                    most_common_color = Color::ColorU16(calculate_most_abundant_color_rgb565(
+                        video_data.frame_buffer,
+                    ));
+                }
+                PixelFormat::ARGB1555 => {
+                    most_common_color = Color::ColorU16(calculate_most_abundant_color_argb1555(
+                        video_data.frame_buffer,
+                    ));
+                }
+                PixelFormat::ARGB8888 => {
+                    most_common_color = Color::ColorU32(calculate_most_abundant_color_argb8888(
+                        video_data.frame_buffer,
+                    ));
+                }
             }
         }
 

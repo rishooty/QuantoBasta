@@ -15,6 +15,7 @@ use pixels::wgpu::PresentMode;
 use pixels::PixelsBuilder;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
+use std::process;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -24,7 +25,6 @@ use video::Color;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::Fullscreen;
 use winit::window::WindowBuilder;
 
 // Define global static variables for handling input, pixel format, video, and audio data
@@ -159,8 +159,8 @@ fn main() {
     }
 
     // Prepare configurations for input handling
-    // let config = libretro::setup_config().unwrap();
-    // let key_device_map = input::key_device_map(&config);
+    let config = libretro::setup_config().unwrap();
+    let key_device_map = input::key_device_map(&config);
     // let joypad_device_map = input::setup_joypad_device_map(&config);
     // let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
     // let mut active_gamepad: Option<GamepadId> = None;
@@ -178,17 +178,16 @@ fn main() {
                 event: WindowEvent::KeyboardInput { input, .. },
                 ..
             } => {
-                if input.state == winit::event::ElementState::Pressed
-                    && input.virtual_keycode == Some(winit::event::VirtualKeyCode::F)
-                {
-                    is_fullscreen = !is_fullscreen; // Toggle fullscreen state
-                    let fullscreen = if is_fullscreen {
-                        Some(Fullscreen::Borderless(None)) // Set to fullscreen
-                    } else {
-                        None // Exit fullscreen
-                    };
-                    window.set_fullscreen(fullscreen);
-                }
+                let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+                let buttons_pressed = &mut buttons.0;
+
+                input::handle_keyboard_input(
+                    input,
+                    buttons_pressed,
+                    &key_device_map,
+                    &window,
+                    is_fullscreen,
+                );
             }
             Event::WindowEvent {
                 event,
@@ -247,10 +246,16 @@ fn main() {
                     }
                     // If needed, set up pixel format
                     if current_state.bytes_per_pixel == 0 {
-                        current_state.bytes_per_pixel = video::set_up_pixel_format();
+                        (current_state.bytes_per_pixel, current_state.pixel_format) =
+                            video::set_up_pixel_format();
                     }
-                    (*control_flow, most_common_color) =
-                        video::render_frame(&mut pixels, &current_state, video_height, video_width);
+                    (*control_flow, most_common_color) = video::render_frame(
+                        &mut pixels,
+                        &current_state,
+                        video_height,
+                        video_width,
+                        bfi_factor > 0.0,
+                    );
 
                     // Reset the greyscale frame counter
                     color_frame_counter = 0;
@@ -266,37 +271,37 @@ fn main() {
 
 // Old Input handling Example
 ////////////////////////////////////////////////////////////////////
-//     while window.is_open() && !window.is_key_down(Key::Escape) {
-//         {
-//             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-//             let buttons_pressed = &mut buttons.0;
-//             let mut game_pad_active: bool = false;
+// while window.is_open() && !window.is_key_down(Key::Escape) {
+//     {
+//         let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+//         let buttons_pressed = &mut buttons.0;
+//         let mut game_pad_active: bool = false;
 
-//             while let Some(gEvent { id, .. }) = gilrs.next_event() {
-//                 // println!("{:?} New event from {}: {:?}", time, id, event);
-//                 active_gamepad = Some(id);
-//             }
-
-//             // Handle gamepad and keyboard input
-//             if let Some(gamepad) = active_gamepad {
-//                 input::handle_gamepad_input(
-//                     &joypad_device_map,
-//                     &gilrs,
-//                     &Some(gamepad),
-//                     buttons_pressed,
-//                 );
-//                 game_pad_active = true;
-//             }
-//             input::handle_keyboard_input(
-//                 core_api,
-//                 &window,
-//                 &mut current_state,
-//                 buttons_pressed,
-//                 &key_device_map,
-//                 &config,
-//                 game_pad_active,
-//             );
+//         while let Some(gEvent { id, .. }) = gilrs.next_event() {
+//             // println!("{:?} New event from {}: {:?}", time, id, event);
+//             active_gamepad = Some(id);
 //         }
-//         // graphics processing...
+
+//         // Handle gamepad and keyboard input
+//         if let Some(gamepad) = active_gamepad {
+//             input::handle_gamepad_input(
+//                 &joypad_device_map,
+//                 &gilrs,
+//                 &Some(gamepad),
+//                 buttons_pressed,
+//             );
+//             game_pad_active = true;
+//         }
+//         input::handle_keyboard_input(
+//             core_api,
+//             &window,
+//             &mut current_state,
+//             buttons_pressed,
+//             &key_device_map,
+//             &config,
+//             game_pad_active,
+//         );
 //     }
+//     // graphics processing...
+// }
 //}

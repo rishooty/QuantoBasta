@@ -10,16 +10,14 @@
 
 use gilrs::{Button, GamepadId, Gilrs};
 use libretro_sys::{
-    CoreAPI, DEVICE_ID_JOYPAD_A, DEVICE_ID_JOYPAD_B, DEVICE_ID_JOYPAD_DOWN, DEVICE_ID_JOYPAD_L,
+    DEVICE_ID_JOYPAD_A, DEVICE_ID_JOYPAD_B, DEVICE_ID_JOYPAD_DOWN, DEVICE_ID_JOYPAD_L,
     DEVICE_ID_JOYPAD_LEFT, DEVICE_ID_JOYPAD_R, DEVICE_ID_JOYPAD_RIGHT, DEVICE_ID_JOYPAD_SELECT,
     DEVICE_ID_JOYPAD_START, DEVICE_ID_JOYPAD_UP, DEVICE_ID_JOYPAD_X, DEVICE_ID_JOYPAD_Y,
 };
 use std::collections::HashMap;
+use winit::window::{Fullscreen, Window};
 
-use crate::{
-    libretro::{self, EmulatorState},
-    BUTTONS_PRESSED,
-};
+use crate::BUTTONS_PRESSED;
 
 /// Maps keyboard key names to libretro device IDs based on the provided configuration.
 pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
@@ -217,88 +215,43 @@ pub fn handle_gamepad_input(
     }
 }
 
-// /// Processes keyboard inputs, updates button states, and handles special input actions.
-// pub fn handle_keyboard_input(
-//     core_api: &CoreAPI,
-//     window: &Window,
-//     current_state: &mut EmulatorState,
-//     buttons_pressed: &mut Vec<i16>,
-//     key_device_map: &HashMap<String, usize>,
-//     config: &HashMap<String, String>,
-//     game_pad_active: bool,
-// ) {
-//     let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
-//     for key in mini_fb_keys_pressed {
-//         let key_as_string = format!("{:?}", key).to_ascii_lowercase();
+/// Processes keyboard inputs, updates button states, and handles special input actions.
+pub fn handle_keyboard_input(
+    input: winit::event::KeyboardInput,
+    buttons_pressed: &mut Vec<i16>,
+    key_device_map: &HashMap<String, usize>,
+    window: &Window,
+    mut is_fullscreen: bool,
+) {
+    let key_as_string = format!("{:?}", input.virtual_keycode.unwrap()).to_ascii_lowercase();
 
-//         if !game_pad_active {
-//             if let Some(&device_id) = key_device_map.get(&key_as_string) {
-//                 buttons_pressed[device_id as usize] = 1;
-//             }
-//         }
+    if let Some(&device_id) = key_device_map.get(&key_as_string) {
+        buttons_pressed[device_id as usize] = if input.state == winit::event::ElementState::Pressed
+        {
+            1
+        } else {
+            0
+        };
+    }
 
-//         if &key_as_string == &config["input_save_state"] {
-//             unsafe {
-//                 libretro::save_state(
-//                     &core_api,
-//                     &config["savestate_directory"],
-//                     &current_state.rom_name,
-//                     &current_state.current_save_slot,
-//                 );
-//             } // f2
-//             continue;
-//         }
-//         if &key_as_string == &config["input_load_state"] {
-//             unsafe {
-//                 libretro::load_state(
-//                     &core_api,
-//                     &config["savestate_directory"],
-//                     &current_state.rom_name,
-//                     &current_state.current_save_slot,
-//                 );
-//             } // f4
-//             continue;
-//         }
-//         if &key_as_string == &config["input_state_slot_increase"] {
-//             if current_state.current_save_slot != 255 {
-//                 current_state.current_save_slot += 1;
-//                 println!(
-//                     "Current save slot increased to: {}",
-//                     current_state.current_save_slot
-//                 );
-//             }
+    if let Some(&device_id) = key_device_map.get(&key_as_string) {
+        buttons_pressed[device_id as usize] = if input.state == winit::event::ElementState::Released
+        {
+            0
+        } else {
+            1
+        };
+    }
 
-//             continue;
-//         }
-
-//         if &key_as_string == &config["input_state_slot_decrease"] {
-//             if current_state.current_save_slot != 0 {
-//                 current_state.current_save_slot -= 1;
-//                 println!(
-//                     "Current save slot decreased to: {}",
-//                     current_state.current_save_slot
-//                 );
-//             }
-
-//             continue;
-//         }
-
-//         println!("Unhandled Key Pressed: {} ", key_as_string);
-//     }
-
-//     if !game_pad_active {
-//         let mini_fb_keys_released = window.get_keys_released();
-//         for key in &mini_fb_keys_released {
-//             let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-//             if let Some(&device_id) = key_device_map.get(&key_as_string) {
-//                 buttons_pressed[device_id as usize] = 0;
-//             } else {
-//                 println!(
-//                     "Unhandled Key Pressed: {} input_player1_a: {}",
-//                     key_as_string, config["input_player1_a"]
-//                 );
-//             }
-//         }
-//     }
-// }
+    if input.state == winit::event::ElementState::Pressed
+        && input.virtual_keycode == Some(winit::event::VirtualKeyCode::F)
+    {
+        is_fullscreen = !is_fullscreen; // Toggle fullscreen state
+        let fullscreen = if is_fullscreen {
+            Some(Fullscreen::Borderless(None)) // Set to fullscreen
+        } else {
+            None // Exit fullscreen
+        };
+        window.set_fullscreen(fullscreen);
+    }
+}
