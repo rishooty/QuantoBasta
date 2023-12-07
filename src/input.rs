@@ -252,12 +252,9 @@ pub fn handle_keyboard_input(
     {
         *is_fullscreen = !*is_fullscreen; // Toggle fullscreen state
         let fullscreen = if *is_fullscreen {
-            // Get the native resolution of the monitor
             let video_mode = primary_monitor.video_modes().next().unwrap();
-            // Set to fullscreen at the native resolution
             Some(Fullscreen::Exclusive(video_mode))
         } else {
-            // Exit fullscreen
             None
         };
         window.set_fullscreen(fullscreen);

@@ -16,12 +16,13 @@ use pixels::PixelsBuilder;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
 use std::process;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use video::Color;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -47,6 +48,7 @@ static AUDIO_DATA_CHANNEL: Lazy<(
     let (sender, receiver) = channel::<Arc<Mutex<AudioBuffer>>>();
     (sender, Arc::new(Mutex::new(receiver)))
 });
+static TARGET_FPS: AtomicU32 = AtomicU32::new(0);
 
 // Structure to hold video data
 struct VideoData {
@@ -56,9 +58,6 @@ struct VideoData {
 
 // The main function, entry point of the application
 fn main() {
-    //video::check_vrr_status();
-    //process::exit(0);
-
     // Parse command line arguments to get ROM and library names
     let (rom_name, library_name) = libretro::parse_command_line_arguments();
     // Initialize emulator state with default values
@@ -81,7 +80,7 @@ fn main() {
     let mut is_fullscreen = false;
     let event_loop = EventLoop::new();
 
-    // Auto refresh setup WIP
+    // Auto refresh setup
     let primary_monitor = event_loop.primary_monitor().unwrap();
     let monitor_refresh_rate_mhz = primary_monitor.refresh_rate_millihertz().unwrap();
     let monitor_refresh_rate_hz = monitor_refresh_rate_mhz as f64 / 1000.0;
@@ -122,6 +121,7 @@ fn main() {
     let sample_rate = av_info.as_ref().map_or(0.0, |av_info| {
         av_info.timing.sample_rate * vsync_sample_factor
     });
+    TARGET_FPS.store(target_fps as u32, Ordering::SeqCst);
 
     // Spawn a new thread for audio handling
     let _audio_thread = thread::spawn(move || {

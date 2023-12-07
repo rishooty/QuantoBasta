@@ -7,8 +7,6 @@
 // This module handles video output for the emulator, including pixel format conversions,
 // rendering frames, and interfacing with the libretro video callbacks.
 
-use std::{process, thread::current};
-
 use crate::{libretro::EmulatorState, VideoData, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL};
 use libretro_sys::PixelFormat;
 use pixels::Pixels;
@@ -22,11 +20,6 @@ impl Default for EmulatorPixelFormat {
     fn default() -> Self {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
-}
-
-pub enum Color {
-    ColorU16(u16),
-    ColorU32(u32),
 }
 
 pub fn is_vrr_ready(monitor: &winit::monitor::MonitorHandle, original_framerate: f64) -> bool {
@@ -119,7 +112,6 @@ pub fn render_frame(
     video_height: u32,
     video_width: u32,
 ) -> ControlFlow {
-    let mut most_common_color: Color = Color::ColorU16(0x0000);
     let mut rgb565_to_rgb8888_table: [u32; 65536] = [0; 65536];
     for i in 0..65536 {
         let r = (i >> 11) & 0x1F;
