@@ -15,7 +15,10 @@ use libretro_sys::{
     DEVICE_ID_JOYPAD_START, DEVICE_ID_JOYPAD_UP, DEVICE_ID_JOYPAD_X, DEVICE_ID_JOYPAD_Y,
 };
 use std::collections::HashMap;
-use winit::window::{Fullscreen, Window};
+use winit::{
+    monitor::{MonitorHandle, VideoMode},
+    window::{Fullscreen, Window},
+};
 
 use crate::BUTTONS_PRESSED;
 
@@ -221,7 +224,8 @@ pub fn handle_keyboard_input(
     buttons_pressed: &mut Vec<i16>,
     key_device_map: &HashMap<String, usize>,
     window: &Window,
-    mut is_fullscreen: bool,
+    primary_monitor: &MonitorHandle,
+    is_fullscreen: &mut bool,
 ) {
     let key_as_string = format!("{:?}", input.virtual_keycode.unwrap()).to_ascii_lowercase();
 
@@ -246,11 +250,15 @@ pub fn handle_keyboard_input(
     if input.state == winit::event::ElementState::Pressed
         && input.virtual_keycode == Some(winit::event::VirtualKeyCode::F)
     {
-        is_fullscreen = !is_fullscreen; // Toggle fullscreen state
-        let fullscreen = if is_fullscreen {
-            Some(Fullscreen::Borderless(None)) // Set to fullscreen
+        *is_fullscreen = !*is_fullscreen; // Toggle fullscreen state
+        let fullscreen = if *is_fullscreen {
+            // Get the native resolution of the monitor
+            let video_mode = primary_monitor.video_modes().next().unwrap();
+            // Set to fullscreen at the native resolution
+            Some(Fullscreen::Exclusive(video_mode))
         } else {
-            None // Exit fullscreen
+            // Exit fullscreen
+            None
         };
         window.set_fullscreen(fullscreen);
     }

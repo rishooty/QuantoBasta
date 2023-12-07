@@ -88,17 +88,12 @@ fn main() {
     let original_framerate = av_info.as_ref().map_or(60.0, |av_info| av_info.timing.fps);
     let is_vrr_ready = video::is_vrr_ready(&primary_monitor, original_framerate);
 
-    let mut bfi_factor: f64 = 0.0;
     let mut target_fps = monitor_refresh_rate_hz;
-    let mut present_mode: PresentMode = PresentMode::AutoVsync;
-    let mut vsync_sample_factor: f64 = 1.0;
     if is_vrr_ready {
         target_fps = original_framerate;
-        present_mode = PresentMode::AutoNoVsync;
-    } else {
-        bfi_factor = (monitor_refresh_rate_hz / original_framerate - 1.0).round();
-        vsync_sample_factor = monitor_refresh_rate_hz / original_framerate;
     }
+    let swap_interval = (monitor_refresh_rate_hz / original_framerate).round();
+    let vsync_sample_factor = monitor_refresh_rate_hz / original_framerate;
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -109,7 +104,6 @@ fn main() {
 
     // use winit::window::Fullscreen;
     // // Assume `window` is the `winit` window that `pixels` is rendering to.
-    // window.set_fullscreen(Some(Fullscreen::Borderless(None)));
 
     let physical_width = video_width;
     let physical_height = video_height;
@@ -119,7 +113,7 @@ fn main() {
         physical_height,
         SurfaceTexture::new(physical_width, physical_height, &window),
     )
-    .present_mode(present_mode)
+    .present_mode(PresentMode::AutoVsync)
     .build();
 
     let mut pixels = pixels_build_result.unwrap();
@@ -171,9 +165,7 @@ fn main() {
     let mut last_update = Instant::now();
 
     // TODO, IMPLEMENT IN AUDIO THREAD
-    let frame_duration = Duration::from_secs_f64(1.0 / target_fps); // for 60 FPS
-    let mut color_frame_counter: u64 = 0;
-    let mut most_common_color: Color = Color::ColorU16(0x0000);
+    let frame_duration = Duration::from_secs_f64(swap_interval / target_fps); // for 60 FPS
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(last_update + frame_duration);
@@ -190,7 +182,8 @@ fn main() {
                     buttons_pressed,
                     &key_device_map,
                     &window,
-                    is_fullscreen,
+                    &primary_monitor,
+                    &mut is_fullscreen,
                 );
             }
             Event::WindowEvent {
@@ -218,54 +211,20 @@ fn main() {
                 ..
             } if id == window_id => *control_flow = ControlFlow::Exit,
             Event::MainEventsCleared => {
-                if current_state.bytes_per_pixel != 0
-                    && bfi_factor > 0.0
-                    && color_frame_counter < bfi_factor.round() as u64
-                {
-                    // Render a greyscale frame
-                    match most_common_color {
-                        Color::ColorU16(color) => match current_state.pixel_format.0 {
-                            PixelFormat::RGB565 => {
-                                *control_flow =
-                                    video::render_color_frame_rgb565(&mut pixels, color);
-                            }
-                            PixelFormat::ARGB1555 => {
-                                *control_flow =
-                                    video::render_color_frame_argb1555(&mut pixels, color);
-                            }
-                            PixelFormat::ARGB8888 => {}
-                        },
-                        Color::ColorU32(color) => {
-                            // color is a u32 value
-                            *control_flow = video::render_color_frame_argb8888(&mut pixels, color);
-                        }
-                    }
-                    // Increment the greyscale frame counter
-                    color_frame_counter += 1;
-                } else {
-                    // Render your emulator frame here
-                    unsafe {
-                        let core_api = &core.lock().unwrap().api;
-                        (core_api.retro_run)();
-                    }
-                    // If needed, set up pixel format
-                    if current_state.bytes_per_pixel == 0 {
-                        (current_state.bytes_per_pixel, current_state.pixel_format) =
-                            video::set_up_pixel_format();
-                    }
-                    (*control_flow, most_common_color) = video::render_frame(
-                        &mut pixels,
-                        &current_state,
-                        video_height,
-                        video_width,
-                        bfi_factor > 0.0,
-                    );
-
-                    // Reset the greyscale frame counter
-                    color_frame_counter = 0;
-                }
-
                 last_update = Instant::now();
+
+                // Render your emulator frame here
+                unsafe {
+                    let core_api = &core.lock().unwrap().api;
+                    (core_api.retro_run)();
+                }
+                // If needed, set up pixel format
+                if current_state.bytes_per_pixel == 0 {
+                    (current_state.bytes_per_pixel, current_state.pixel_format) =
+                        video::set_up_pixel_format();
+                }
+                *control_flow =
+                    video::render_frame(&mut pixels, &current_state, video_height, video_width);
             }
 
             _ => (),
