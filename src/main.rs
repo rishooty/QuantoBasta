@@ -87,7 +87,6 @@ fn main() {
         target_fps = original_framerate;
     }
     let swap_interval = (monitor_refresh_rate_hz / original_framerate).round();
-    let vsync_sample_factor = (monitor_refresh_rate_hz / original_framerate).clamp(0.95, 1.05);
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -114,7 +113,12 @@ fn main() {
 
     // Extract the audio sample rate from the emulator state
     let sample_rate = av_info.as_ref().map_or(0.0, |av_info| {
-        av_info.timing.sample_rate * vsync_sample_factor
+        let original_sample_rate = av_info.timing.sample_rate;
+        let min_sample_rate = original_sample_rate * 0.95;
+        let max_sample_rate = original_sample_rate * 1.05;
+        ((monitor_refresh_rate_hz / swap_interval) * original_sample_rate / original_framerate
+            + 0.5)
+            .clamp(min_sample_rate, max_sample_rate)
     });
     FINAL_SAMPLE_RATE.store(sample_rate as u32, Ordering::SeqCst);
 
