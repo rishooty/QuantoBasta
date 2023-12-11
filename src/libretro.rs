@@ -7,8 +7,8 @@
 // This module provides the interface to the libretro core, including functions for
 // loading ROMs, managing save states, and handling configurations.
 
-use crate::PIXEL_FORMAT_CHANNEL;
 use crate::video;
+use crate::PIXEL_FORMAT_CHANNEL;
 use clap::Parser;
 use libc::c_void;
 use libloading::Library;

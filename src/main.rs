@@ -42,7 +42,7 @@ static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData
         let (sender, receiver) = channel::<VideoData>();
         (sender, Arc::new(Mutex::new(receiver)))
     });
-static TARGET_FPS: AtomicU32 = AtomicU32::new(0);
+static FINAL_SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
 
 // Structure to hold video data
 struct VideoData {
@@ -115,7 +115,7 @@ fn main() {
     let sample_rate = av_info.as_ref().map_or(0.0, |av_info| {
         av_info.timing.sample_rate * vsync_sample_factor
     });
-    TARGET_FPS.store(target_fps as u32, Ordering::SeqCst);
+    FINAL_SAMPLE_RATE.store(sample_rate as u32, Ordering::SeqCst);
 
     let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
@@ -125,7 +125,9 @@ fn main() {
             // Try to lock the buffer pool
             if let Ok(pool) = BUFFER_POOL.try_lock() {
                 // Wait for the Condvar with a timeout
-                let (pool, timeout_result) = AUDIO_CONDVAR.wait_timeout(pool, Duration::from_millis(10)).unwrap();
+                let (pool, _timeout_result) = AUDIO_CONDVAR
+                    .wait_timeout(pool, Duration::from_millis(10))
+                    .unwrap();
                 // Play audio in a loop
                 for buffer_arc in pool.iter() {
                     // Try to lock the buffer
@@ -138,7 +140,6 @@ fn main() {
             }
         }
     });
-    
 
     // Set up libretro callbacks for video, input, and audio
     unsafe {
