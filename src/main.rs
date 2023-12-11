@@ -87,7 +87,7 @@ fn main() {
         target_fps = original_framerate;
     }
     let swap_interval = (monitor_refresh_rate_hz / original_framerate).round();
-    let vsync_sample_factor = monitor_refresh_rate_hz / original_framerate;
+    let vsync_sample_factor = (monitor_refresh_rate_hz / original_framerate).clamp(0.95, 1.05);
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -125,7 +125,7 @@ fn main() {
         loop {
             // Try to lock the buffer pool
             if let Ok(buffer) = AUDIO_BUFFER.try_lock() {
-                // Wait for the Condvar with a timeout 
+                // Wait for the Condvar with a timeout
                 // of 16ms per swap interval
                 let (buffer, _timeout_result) = AUDIO_CONDVAR
                     .wait_timeout(
