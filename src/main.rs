@@ -18,6 +18,7 @@ use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
 use soundtouch::Setting;
 use soundtouch::SoundTouch;
+use std::collections::VecDeque;
 use std::process;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -131,19 +132,28 @@ fn main() {
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Try to lock the buffer pool
-            if let Ok(buffer) = AUDIO_BUFFER.try_lock() {
+            if let Ok(mut buffer_pool) = AUDIO_BUFFER.try_lock() {
                 // Wait for the Condvar with a timeout
                 // of 16ms per swap interval
-                let (buffer, _timeout_result) = AUDIO_CONDVAR
+                let (mut buffer_pool, _timeout_result) = AUDIO_CONDVAR
                     .wait_timeout(
-                        buffer,
-                        Duration::from_millis(8.0 as u64 * swap_interval as u64),
+                        buffer_pool,
+                        Duration::from_millis(16.0 as u64 * swap_interval as u64),
                     )
                     .unwrap();
-                unsafe {
-                    audio::play_audio(&sink, &buffer, sample_rate as u32, &mut soundtouch);
+                // Process all available buffers
+                while let Some(buffer) = buffer_pool.pop_front() {
+                    let mut audio_samples = VecDeque::new();
+                    audio_samples.push_back(buffer);
+                    unsafe {
+                        audio::play_audio(
+                            &sink,
+                            audio_samples,
+                            sample_rate as u32,
+                            &mut soundtouch,
+                        );
+                    }
                 }
-                AUDIO_CONDVAR.notify_all();
             }
         }
     });
@@ -231,7 +241,8 @@ fn main() {
                     (current_state.bytes_per_pixel, current_state.pixel_format) =
                         video::set_up_pixel_format();
                 }
-                let _guard = AUDIO_BUFFER.lock().unwrap();
+                let _audio_buf = AUDIO_BUFFER.lock().unwrap();
+                let _guard = AUDIO_CONDVAR.wait_timeout(_audio_buf, Duration::from_millis(0));
                 *control_flow =
                     video::render_frame(&mut pixels, &current_state, video_height, video_width);
             }
