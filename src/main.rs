@@ -7,7 +7,6 @@ mod audio;
 mod input;
 mod libretro;
 mod video;
-use audio::AudioBuffer;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
@@ -43,13 +42,6 @@ static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData
         let (sender, receiver) = channel::<VideoData>();
         (sender, Arc::new(Mutex::new(receiver)))
     });
-static AUDIO_DATA_CHANNEL: Lazy<(
-    Sender<Arc<Mutex<AudioBuffer>>>,
-    Arc<Mutex<Receiver<Arc<Mutex<AudioBuffer>>>>>,
-)> = Lazy::new(|| {
-    let (sender, receiver) = channel::<Arc<Mutex<AudioBuffer>>>();
-    (sender, Arc::new(Mutex::new(receiver)))
-});
 static TARGET_FPS: AtomicU32 = AtomicU32::new(0);
 
 // Structure to hold video data
