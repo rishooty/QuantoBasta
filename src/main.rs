@@ -28,6 +28,8 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
+use crate::audio::BUFFER_POOL;
+
 // Define global static variables for handling input, pixel format, video, and audio data
 static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
     Lazy::new(|| Mutex::new((vec![0; 16], vec![0; 16])));
@@ -129,12 +131,12 @@ fn main() {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
-            let receiver = AUDIO_DATA_CHANNEL.1.lock().unwrap();
+            let pool = BUFFER_POOL.lock().unwrap();
             // Play audio in a loop
-            for buffer_arc in receiver.try_iter() {
-                let buffer = buffer_arc.lock().unwrap();
+            for buffer_arc in pool.iter() {
+                let mut buffer = buffer_arc.lock().unwrap();
                 unsafe {
-                    audio::play_audio(&sink, &*buffer, sample_rate as u32);
+                    audio::play_audio(&sink, &mut buffer, sample_rate as u32);
                 }
             }
         }
