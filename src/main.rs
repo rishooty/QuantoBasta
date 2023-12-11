@@ -8,8 +8,8 @@ mod input;
 mod libretro;
 mod video;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
-pub static AUDIO_CONDVAR:Condvar = Condvar::new();
-use crate::audio::BUFFER_POOL;
+pub static AUDIO_CONDVAR: Condvar = Condvar::new();
+use crate::audio::AUDIO_BUFFER;
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
 use pixels::wgpu::PresentMode;
@@ -17,10 +17,10 @@ use pixels::PixelsBuilder;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
 use std::process;
-use std::sync::Condvar;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Condvar;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -124,21 +124,18 @@ fn main() {
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Try to lock the buffer pool
-            if let Ok(pool) = BUFFER_POOL.try_lock() {
+            if let Ok(buffer) = AUDIO_BUFFER.try_lock() {
                 // Wait for the Condvar with a timeout
-                let (pool, _timeout_result) = AUDIO_CONDVAR
-                    .wait_timeout(pool, Duration::from_millis(16))
+                let (buffer, _timeout_result) = AUDIO_CONDVAR
+                    .wait_timeout(
+                        buffer,
+                        Duration::from_millis(16.0 as u64 * swap_interval as u64),
+                    )
                     .unwrap();
-                // Play audio in a loop
-                for buffer_arc in pool.iter() {
-                    // Try to lock the buffer
-                    if let Ok(mut buffer) = buffer_arc.try_lock() {
-                        unsafe {
-                            audio::play_audio(&sink, &mut buffer, sample_rate as u32);
-                            AUDIO_CONDVAR.notify_all();
-                        }
-                    }
+                unsafe {
+                    audio::play_audio(&sink, &buffer, sample_rate as u32);
                 }
+                AUDIO_CONDVAR.notify_all();
             }
         }
     });
@@ -226,7 +223,7 @@ fn main() {
                     (current_state.bytes_per_pixel, current_state.pixel_format) =
                         video::set_up_pixel_format();
                 }
-                let _guard = BUFFER_POOL.lock().unwrap();
+                let _guard = AUDIO_BUFFER.lock().unwrap();
                 *control_flow =
                     video::render_frame(&mut pixels, &current_state, video_height, video_width);
             }
