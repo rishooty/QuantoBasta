@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
-use crate::{FINAL_SAMPLE_RATE, AUDIO_CONDVAR};
+use crate::{AUDIO_CONDVAR, FINAL_SAMPLE_RATE};
 
 // Constants for audio processing.
 const AUDIO_CHANNELS: usize = 2; // Stereo audio with left and right channels.
@@ -48,10 +48,16 @@ pub unsafe fn play_audio(
         let mut buffer: [f32; 1024] = [0.0; 1024];
         let buffer_len = buffer.len();
         let mut n_samples = 1;
-        while n_samples != 0 {
+        while processed_samples.len() < buffer_len / 2 {
             n_samples = soundtouch.receive_samples(&mut buffer, buffer_len / 2);
+            if n_samples == 0 {
+                break;
+            }
             processed_samples.extend_from_slice(&buffer[0..n_samples]);
         }
+
+        // If SoundTouch was not able to produce enough processed audio, fill the rest with zeros
+        processed_samples.resize(buffer_len / 2, 0.0);
 
         // Convert the f32 samples back to i16 for Rodio
         let processed_samples_i16: Vec<i16> = processed_samples
@@ -74,7 +80,6 @@ pub unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i1
     println!("libretro_set_audio_sample_callback");
 }
 
-// In your callback function
 pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     audio_data: *const i16,
     frames: libc::size_t,
@@ -92,6 +97,8 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
 
     // Add the new buffer to the buffer pool.
     buffer_pool.push_back(new_buffer);
+
+    // Notify the condition variable that there's new data in the buffer pool
     AUDIO_CONDVAR.notify_all();
 
     frames

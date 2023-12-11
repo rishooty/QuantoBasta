@@ -127,18 +127,20 @@ fn main() {
         soundtouch
             .set_channels(2)
             .set_sample_rate(48000)
-            .set_tempo(tempo_ratio);
+            .set_tempo(tempo_ratio)
+            .set_setting(Setting::UseQuickseek, 1)
+            .set_setting(Setting::OverlapMs, 16);
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Try to lock the buffer pool
-            if let Ok(mut buffer_pool) = AUDIO_BUFFER.try_lock() {
+            if let Ok(buffer_pool) = AUDIO_BUFFER.try_lock() {
                 // Wait for the Condvar with a timeout
                 // of 16ms per swap interval
                 let (mut buffer_pool, _timeout_result) = AUDIO_CONDVAR
                     .wait_timeout(
                         buffer_pool,
-                        Duration::from_millis(16.0 as u64 * swap_interval as u64),
+                        Duration::from_millis(16 as u64 * swap_interval as u64),
                     )
                     .unwrap();
                 // Process all available buffers
@@ -229,22 +231,22 @@ fn main() {
                 ..
             } if id == window_id => *control_flow = ControlFlow::Exit,
             Event::MainEventsCleared => {
-                last_update = Instant::now();
+                if Instant::now() - last_update >= frame_duration {
+                    last_update = Instant::now();
 
-                // Render your emulator frame here
-                unsafe {
-                    let core_api = &core.lock().unwrap().api;
-                    (core_api.retro_run)();
+                    // Render your emulator frame here
+                    unsafe {
+                        let core_api = &core.lock().unwrap().api;
+                        (core_api.retro_run)();
+                    }
+                    // If needed, set up pixel format
+                    if current_state.bytes_per_pixel == 0 {
+                        (current_state.bytes_per_pixel, current_state.pixel_format) =
+                            video::set_up_pixel_format();
+                    }
+                    *control_flow =
+                        video::render_frame(&mut pixels, &current_state, video_height, video_width);
                 }
-                // If needed, set up pixel format
-                if current_state.bytes_per_pixel == 0 {
-                    (current_state.bytes_per_pixel, current_state.pixel_format) =
-                        video::set_up_pixel_format();
-                }
-                let _audio_buf = AUDIO_BUFFER.lock().unwrap();
-                let _guard = AUDIO_CONDVAR.wait_timeout(_audio_buf, Duration::from_millis(0));
-                *control_flow =
-                    video::render_frame(&mut pixels, &current_state, video_height, video_width);
             }
 
             _ => (),
