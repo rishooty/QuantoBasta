@@ -6,13 +6,10 @@
 // It uses the `rodio` crate for audio output and integrates with the libretro API for audio data.
 
 use once_cell::sync::Lazy;
-use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
+use soundtouch::SoundTouch;
 use std::sync::atomic::Ordering;
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::sync::Mutex;
 
 use crate::FINAL_SAMPLE_RATE;
 
@@ -28,11 +25,42 @@ pub static AUDIO_BUFFER: Lazy<Mutex<Vec<i16>>> = Lazy::new(|| {
 });
 
 // Plays audio using the `rodio` library.
-pub unsafe fn play_audio(sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
-    let source = SamplesBuffer::new(AUDIO_CHANNELS.try_into().unwrap(), sample_rate, &audio_samples[..]);
+pub unsafe fn play_audio(
+    sink: &Sink,
+    audio_samples: &Vec<i16>,
+    sample_rate: u32,
+    soundtouch: &mut SoundTouch,
+) {
+    // Convert the i16 samples to f32 for SoundTouch
+    let audio_samples_f32: Vec<f32> = audio_samples.iter().map(|&sample| sample as f32).collect();
+
+    // Feed the audio samples into SoundTouch
+    soundtouch.put_samples(&audio_samples_f32, audio_samples_f32.len() / 2);
+
+    // Retrieve the processed audio from SoundTouch
+    let mut processed_samples: Vec<f32> = Vec::new();
+    let mut buffer: [f32; 1024] = [0.0; 1024];
+    let buffer_len = buffer.len();
+    let mut n_samples = 1;
+    while n_samples != 0 {
+        n_samples = soundtouch.receive_samples(&mut buffer, buffer_len / 2);
+        processed_samples.extend_from_slice(&buffer[0..n_samples]);
+    }
+
+    // Convert the f32 samples back to i16 for Rodio
+    let processed_samples_i16: Vec<i16> = processed_samples
+        .iter()
+        .map(|&sample| sample as i16)
+        .collect();
+
+    // Play the processed audio with Rodio
+    let source = rodio::buffer::SamplesBuffer::new(
+        AUDIO_CHANNELS.try_into().unwrap(),
+        sample_rate,
+        &processed_samples_i16[..],
+    );
     sink.append(source);
 }
-
 
 // Callback function for the libretro API to handle individual audio samples.
 pub unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {

@@ -16,6 +16,8 @@ use pixels::wgpu::PresentMode;
 use pixels::PixelsBuilder;
 use pixels::SurfaceTexture;
 use rodio::{OutputStream, Sink};
+use soundtouch::Setting;
+use soundtouch::SoundTouch;
 use std::process;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -87,6 +89,7 @@ fn main() {
         target_fps = original_framerate;
     }
     let swap_interval = (monitor_refresh_rate_hz / original_framerate).round();
+    let tempo_ratio = (monitor_refresh_rate_hz / original_framerate).clamp(0.95, 1.05);
 
     let window = WindowBuilder::new()
         .with_title("Retro Emulator")
@@ -112,18 +115,18 @@ fn main() {
     let mut pixels = pixels_build_result.unwrap();
 
     // Extract the audio sample rate from the emulator state
-    let sample_rate = av_info.as_ref().map_or(0.0, |av_info| {
-        let original_sample_rate = av_info.timing.sample_rate;
-        let min_sample_rate = original_sample_rate * 0.95;
-        let max_sample_rate = original_sample_rate * 1.05;
-        ((monitor_refresh_rate_hz / swap_interval) * original_sample_rate / original_framerate
-            + 0.5)
-            .clamp(min_sample_rate, max_sample_rate)
-    });
+    let sample_rate = av_info
+        .as_ref()
+        .map_or(0.0, |av_info| av_info.timing.sample_rate);
     FINAL_SAMPLE_RATE.store(sample_rate as u32, Ordering::SeqCst);
 
     let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
+        let mut soundtouch = SoundTouch::new();
+        soundtouch
+            .set_channels(2)
+            .set_sample_rate(48000)
+            .set_tempo(tempo_ratio);
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
@@ -134,11 +137,11 @@ fn main() {
                 let (buffer, _timeout_result) = AUDIO_CONDVAR
                     .wait_timeout(
                         buffer,
-                        Duration::from_millis(16.0 as u64 * swap_interval as u64),
+                        Duration::from_millis(8.0 as u64 * swap_interval as u64),
                     )
                     .unwrap();
                 unsafe {
-                    audio::play_audio(&sink, &buffer, sample_rate as u32);
+                    audio::play_audio(&sink, &buffer, sample_rate as u32, &mut soundtouch);
                 }
                 AUDIO_CONDVAR.notify_all();
             }
