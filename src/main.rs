@@ -125,7 +125,8 @@ fn main() {
         loop {
             // Try to lock the buffer pool
             if let Ok(buffer) = AUDIO_BUFFER.try_lock() {
-                // Wait for the Condvar with a timeout
+                // Wait for the Condvar with a timeout 
+                // of 16ms per swap interval
                 let (buffer, _timeout_result) = AUDIO_CONDVAR
                     .wait_timeout(
                         buffer,
