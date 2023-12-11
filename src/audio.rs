@@ -8,7 +8,6 @@
 use once_cell::sync::Lazy;
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
-use std::sync::Condvar;
 use std::sync::atomic::Ordering;
 use std::{
     collections::VecDeque,
@@ -18,10 +17,9 @@ use std::{
 use crate::FINAL_SAMPLE_RATE;
 
 // Constants for audio processing.
-pub static AUDIO_CONDVAR: Lazy<Condvar> = Lazy::new(|| Condvar::new());
 const AUDIO_CHANNELS: usize = 2; // Stereo audio with left and right channels.
 const BUFFER_DURATION_MS: u32 = 64; // Duration of each audio buffer in milliseconds.
-const POOL_SIZE: usize = 20; // Number of buffers in the audio buffer pool.
+const POOL_SIZE: usize = 1; // Number of buffers in the audio buffer pool.
 
 // Global buffer pool for managing audio buffers.
 pub static BUFFER_POOL: Lazy<Mutex<Vec<Arc<Mutex<VecDeque<i16>>>>>> = Lazy::new(|| {
@@ -71,8 +69,6 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
 
             // Add the new audio data to the buffer.
             buffer.extend(audio_slice.iter().copied());
-            // Signal the Condvar
-            AUDIO_CONDVAR.notify_all();
         }
 
         // Return the buffer to the pool.
