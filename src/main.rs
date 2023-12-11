@@ -8,6 +8,8 @@ mod input;
 mod libretro;
 mod video;
 //use gilrs::{Event as gEvent, GamepadId, Gilrs};
+use crate::audio::AUDIO_CONDVAR;
+use crate::audio::BUFFER_POOL;
 use libretro_sys::PixelFormat;
 use once_cell::sync::Lazy;
 use pixels::wgpu::PresentMode;
@@ -26,8 +28,6 @@ use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-
-use crate::audio::BUFFER_POOL;
 
 // Define global static variables for handling input, pixel format, video, and audio data
 static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
@@ -117,22 +117,28 @@ fn main() {
     });
     TARGET_FPS.store(target_fps as u32, Ordering::SeqCst);
 
-    // Spawn a new thread for audio handling
     let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
-            let pool = BUFFER_POOL.lock().unwrap();
-            // Play audio in a loop
-            for buffer_arc in pool.iter() {
-                let mut buffer = buffer_arc.lock().unwrap();
-                unsafe {
-                    audio::play_audio(&sink, &mut buffer, sample_rate as u32);
+            // Try to lock the buffer pool
+            if let Ok(pool) = BUFFER_POOL.try_lock() {
+                // Wait for the Condvar with a timeout
+                let (pool, timeout_result) = AUDIO_CONDVAR.wait_timeout(pool, Duration::from_millis(10)).unwrap();
+                // Play audio in a loop
+                for buffer_arc in pool.iter() {
+                    // Try to lock the buffer
+                    if let Ok(mut buffer) = buffer_arc.try_lock() {
+                        unsafe {
+                            audio::play_audio(&sink, &mut buffer, sample_rate as u32);
+                        }
+                    }
                 }
             }
         }
     });
+    
 
     // Set up libretro callbacks for video, input, and audio
     unsafe {
@@ -217,6 +223,8 @@ fn main() {
                     (current_state.bytes_per_pixel, current_state.pixel_format) =
                         video::set_up_pixel_format();
                 }
+                let guard = BUFFER_POOL.lock().unwrap();
+                //let _result = AUDIO_CONDVAR.wait(guard);
                 *control_flow =
                     video::render_frame(&mut pixels, &current_state, video_height, video_width);
             }
